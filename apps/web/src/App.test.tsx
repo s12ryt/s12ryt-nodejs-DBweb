@@ -377,13 +377,13 @@ describe('DBWeb application shell', () => {
     await user.click(screen.getByRole('tab', { name: '結構' }))
     await screen.findByText('PostgreSQL 17.5.0')
     const actions = screen.getByLabelText('DDL 操作')
-    expect(within(actions).getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual([
+    expect(within(actions).getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual(expect.arrayContaining([
       '', 'create-database', 'rename-database', 'drop-database',
       'create-schema', 'rename-schema', 'drop-schema',
       'create-table', 'rename-table', 'drop-table',
       'add-column', 'rename-column', 'drop-column',
       'create-index', 'drop-index', 'add-constraint', 'drop-constraint',
-    ])
+    ]))
 
     await user.selectOptions(actions, 'add-column')
     await user.type(screen.getByLabelText('Schema 名稱'), 'public')
@@ -412,6 +412,56 @@ describe('DBWeb application shell', () => {
       { command: { kind: 'create-index', schema: 'public', table: 'orders', name: 'orders_total_idx', method: 'btree', unique: false, parts: [{ column: 'total' }], confirmed: false } },
       { command: { kind: 'add-constraint', schema: 'public', table: 'orders', name: 'orders_number_key', constraint: { kind: 'unique', columns: ['number'] }, confirmed: false } },
     ]))
+  })
+
+  it('exposes advanced DDL actions and confirms PostgreSQL function source', async () => {
+    const ddlBodies: unknown[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url.endsWith('/ddl/capabilities')) return Response.json(postgres96DdlCapabilities)
+      if (url.endsWith('/ddl/execute')) {
+        ddlBodies.push(JSON.parse(String(init?.body)))
+        return Response.json({ statementsExecuted: 1, transactional: true })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText('Primary PostgreSQL'))
+    await user.click(screen.getByRole('tab', { name: '結構' }))
+    await screen.findByText('PostgreSQL 9.6.24')
+    const actions = screen.getByLabelText('DDL 操作')
+    const values = within(actions).getAllByRole('option').map((option) => option.getAttribute('value'))
+    expect(values).toEqual(expect.arrayContaining([
+      'create-view', 'drop-view', 'create-materialized-view', 'refresh-materialized-view',
+      'drop-materialized-view', 'create-sequence', 'drop-sequence', 'create-enum',
+      'create-domain', 'drop-type', 'create-extension', 'drop-extension',
+      'create-routine', 'drop-routine', 'create-trigger', 'drop-trigger',
+      'create-event', 'drop-event', 'create-partition', 'drop-partition',
+    ]))
+    expect(within(actions).getByRole('option', { name: '建立事件' })).toBeDisabled()
+
+    await user.selectOptions(actions, 'create-routine')
+    expect(screen.getByRole('option', { name: 'procedure' })).toBeDisabled()
+    await user.selectOptions(screen.getByLabelText('Routine 類型'), 'function')
+    await user.type(screen.getByLabelText('Schema 名稱'), 'public')
+    await user.type(screen.getByLabelText('名稱'), 'mask_email')
+    await user.type(screen.getByLabelText('回傳型別'), 'text')
+    await user.selectOptions(screen.getByLabelText('語言'), 'sql')
+    await user.type(screen.getByLabelText('程式碼原文'), "SELECT 'masked'")
+    await user.click(screen.getByRole('button', { name: '執行 DDL' }))
+    const dialog = screen.getByRole('dialog', { name: '確認結構變更' })
+    await user.click(within(dialog).getByRole('button', { name: '刪除' }))
+
+    await waitFor(() => expect(ddlBodies).toEqual([{ command: {
+      kind: 'create-routine', routineKind: 'function', schema: 'public', name: 'mask_email',
+      arguments: [], returns: { name: 'text' }, language: 'sql', body: "SELECT 'masked'",
+      confirmed: true,
+    } }]))
   })
 })
 
@@ -471,6 +521,16 @@ const postgresDdlCapabilities = {
   column: { generated: false, identity: true, rename: true, renameSyntax: 'rename-column' },
   constraint: { check: true, foreignKey: true, primaryKey: true, unique: true },
   index: { methods: ['btree', 'hash', 'gin', 'gist', 'brin'], expression: true, partial: true, prefixLength: false },
+  advanced: {
+    view: true, materializedView: true, sequence: true, enum: true, domain: true,
+    function: true, procedure: true, trigger: true, partition: true, extension: true, event: false,
+  },
+}
+
+const postgres96DdlCapabilities = {
+  ...postgresDdlCapabilities,
+  version: { major: 9, minor: 6, patch: 24, assumedMinimum: false },
+  advanced: { ...postgresDdlCapabilities.advanced, procedure: false, partition: false },
 }
 
 const productOriginal = {

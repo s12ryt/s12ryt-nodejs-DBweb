@@ -253,13 +253,22 @@ const DDL_ACTIONS = [
   'create-table', 'rename-table', 'drop-table',
   'add-column', 'rename-column', 'drop-column',
   'create-index', 'drop-index', 'add-constraint', 'drop-constraint',
+  'create-view', 'drop-view',
+  'create-materialized-view', 'refresh-materialized-view', 'drop-materialized-view',
+  'create-sequence', 'drop-sequence',
+  'create-enum', 'create-domain', 'drop-type',
+  'create-extension', 'drop-extension',
+  'create-routine', 'drop-routine',
+  'create-trigger', 'drop-trigger',
+  'create-event', 'drop-event',
+  'create-partition', 'drop-partition',
 ] as const
-type CoreDdlAction = (typeof DDL_ACTIONS)[number]
+type DdlAction = (typeof DDL_ACTIONS)[number]
 
 function DdlWorkbench({ connectionId, locale, csrfToken }: { connectionId: string; locale: Locale; csrfToken: string }) {
   const t = translations(locale)
   const [capabilities, setCapabilities] = useState<DdlCapabilities>()
-  const [action, setAction] = useState<CoreDdlAction>()
+  const [action, setAction] = useState<DdlAction>()
   const [pendingCommand, setPendingCommand] = useState<Record<string, unknown>>()
   const [error, setError] = useState('')
   const [result, setResult] = useState<{ statementsExecuted: number; transactional: boolean }>()
@@ -307,7 +316,7 @@ function DdlWorkbench({ connectionId, locale, csrfToken }: { connectionId: strin
       {error && <div className="inline-error" role="alert">{error}</div>}
       <form className="ddl-form" key={action ?? 'none'} onSubmit={submit}>
         <Field label={t('ddlAction')}>
-          <select value={action ?? ''} onChange={(event) => setAction(event.target.value as CoreDdlAction)}>
+            <select value={action ?? ''} onChange={(event) => setAction(event.target.value as DdlAction)}>
             <option value="" disabled>{t('ddlAction')}</option>
             {DDL_ACTIONS.map((item) => <option key={item} value={item} disabled={!ddlActionSupported(item, capabilities)}>{t(ddlActionLabel(item))}</option>)}
           </select>
@@ -322,7 +331,7 @@ function DdlWorkbench({ connectionId, locale, csrfToken }: { connectionId: strin
   )
 }
 
-function DdlCommandFields({ action, capabilities, locale }: { action: CoreDdlAction; capabilities: DdlCapabilities | undefined; locale: Locale }) {
+function DdlCommandFields({ action, capabilities, locale }: { action: DdlAction; capabilities: DdlCapabilities | undefined; locale: Locale }) {
   const t = translations(locale)
   const databaseAction = action.endsWith('-database')
   const schemaAction = action.endsWith('-schema')
@@ -330,6 +339,7 @@ function DdlCommandFields({ action, capabilities, locale }: { action: CoreDdlAct
   const columnAction = action.endsWith('-column')
   const indexAction = action.endsWith('-index')
   const constraintAction = action.endsWith('-constraint')
+  const advancedAction = DDL_ACTIONS.indexOf(action) >= 16
   const rename = action.startsWith('rename-')
   const createColumn = action === 'create-table' || action === 'add-column' || (action === 'rename-column' && capabilities?.column.renameSyntax === 'change-column')
   return <>
@@ -362,13 +372,56 @@ function DdlCommandFields({ action, capabilities, locale }: { action: CoreDdlAct
       <Field label={t('ddlReferenceColumns')}><input name="referenceColumns" /></Field>
       <Field label={t('ddlCheckExpression')}><input name="checkExpression" /></Field>
     </>}
+    {advancedAction && !action.endsWith('-extension') && <Field label={t('ddlSchemaName')}><input name="advancedSchema" required autoFocus /></Field>}
+    {advancedAction && <Field label={t('name')}><input name="advancedName" required /></Field>}
+    {(action.endsWith('-trigger') || action.endsWith('-partition')) && <Field label={t('ddlTableName')}><input name="advancedTable" required /></Field>}
+    {action === 'create-view' && <><Field label={t('ddlQuery')}><textarea name="query" required /></Field><label className="check-field"><input name="replace" type="checkbox" />{t('ddlReplace')}</label></>}
+    {action === 'create-materialized-view' && <><Field label={t('ddlQuery')}><textarea name="query" required /></Field><label className="check-field"><input name="withData" type="checkbox" defaultChecked />{t('ddlWithData')}</label></>}
+    {action === 'refresh-materialized-view' && <label className="check-field"><input name="concurrently" type="checkbox" />{t('ddlConcurrently')}</label>}
+    {action === 'create-sequence' && <><Field label="START"><input name="start" type="number" /></Field><Field label="INCREMENT"><input name="increment" type="number" /></Field><Field label="CACHE"><input name="cache" type="number" /></Field><label className="check-field"><input name="cycle" type="checkbox" />{t('ddlCycle')}</label></>}
+    {action === 'create-enum' && <Field label={t('ddlValues')}><input name="values" required /></Field>}
+    {action === 'create-domain' && <><Field label={t('ddlBaseType')}><select name="baseType" required>{capabilities?.columnTypes.map((type) => <option key={type}>{type}</option>)}</select></Field><label className="check-field"><input name="nullable" type="checkbox" />{t('ddlNullable')}</label><Field label={t('ddlCheckExpression')}><input name="domainCheck" /></Field></>}
+    {action === 'create-extension' && <><Field label={t('ddlSchemaName')}><input name="extensionSchema" /></Field><Field label={t('ddlVersion')}><input name="version" /></Field></>}
+    {(action === 'create-routine' || action === 'drop-routine') && <><Field label={t('ddlRoutineKind')}><select name="routineKind"><option value="function" disabled={!capabilities?.advanced.function}>function</option><option value="procedure" disabled={!capabilities?.advanced.procedure}>procedure</option></select></Field><Field label={t('ddlArguments')}><input name="argumentTypes" /></Field></>}
+    {action === 'create-routine' && <><Field label={t('ddlReturnType')}><input name="returnType" /></Field>{capabilities?.engine === 'postgres' && <Field label={t('ddlLanguage')}><select name="language"><option value="sql">sql</option><option value="plpgsql">plpgsql</option></select></Field>}<Field label={t('ddlBody')}><textarea name="body" required /></Field></>}
+    {action === 'create-trigger' && <><Field label={t('ddlTriggerTiming')}><select name="timing"><option value="before">BEFORE</option><option value="after">AFTER</option><option value="instead-of">INSTEAD OF</option></select></Field><Field label={t('ddlTriggerEvents')}><input name="events" defaultValue="insert" required /></Field><Field label={t('ddlForEach')}><select name="forEach"><option value="row">ROW</option><option value="statement">STATEMENT</option></select></Field>{capabilities?.engine === 'postgres' ? <><Field label={t('ddlFunctionSchema')}><input name="functionSchema" required /></Field><Field label={t('ddlFunctionName')}><input name="functionName" required /></Field></> : <Field label={t('ddlBody')}><textarea name="body" required /></Field>}</>}
+    {action === 'create-event' && <><Field label={t('ddlScheduleKind')}><select name="scheduleKind"><option value="every">EVERY</option><option value="at">AT</option></select></Field><Field label={t('ddlScheduleAmount')}><input name="scheduleAmount" type="number" defaultValue="1" /></Field><Field label={t('ddlScheduleUnit')}><select name="scheduleUnit"><option value="minute">MINUTE</option><option value="hour">HOUR</option><option value="day">DAY</option><option value="week">WEEK</option><option value="month">MONTH</option><option value="year">YEAR</option></select></Field><Field label={t('ddlScheduleAt')}><input name="scheduleAt" /></Field><label className="check-field"><input name="preserve" type="checkbox" />{t('ddlPreserve')}</label><label className="check-field"><input name="enabled" type="checkbox" defaultChecked />{t('ddlEnabled')}</label><Field label={t('ddlBody')}><textarea name="body" required /></Field></>}
+    {action === 'create-partition' && <Field label={t('ddlDefinition')}><input name="definition" required /></Field>}
     {action.startsWith('drop-') && action !== 'drop-database' && <label className="check-field"><input name="cascade" type="checkbox" />{t('ddlCascade')}</label>}
   </>
 }
 
-function buildCoreDdlCommand(action: CoreDdlAction, data: FormData, capabilities?: DdlCapabilities): Record<string, unknown> {
+function buildCoreDdlCommand(action: DdlAction, data: FormData, capabilities?: DdlCapabilities): Record<string, unknown> {
   const value = (name: string) => String(data.get(name) ?? '').trim()
   const list = (name: string) => value(name).split(',').map((item) => item.trim()).filter(Boolean)
+  const number = (name: string) => value(name) ? Number(value(name)) : undefined
+  const advancedSchema = value('advancedSchema')
+  const advancedName = value('advancedName')
+  const cascade = data.has('cascade') ? { cascade: true } : {}
+  if (action === 'create-view') return { kind: action, schema: advancedSchema, name: advancedName, query: value('query'), ...(data.has('replace') ? { replace: true } : {}), confirmed: false }
+  if (action === 'drop-view') return { kind: action, schema: advancedSchema, name: advancedName, ...cascade, confirmed: false }
+  if (action === 'create-materialized-view') return { kind: action, schema: advancedSchema, name: advancedName, query: value('query'), withData: data.has('withData'), confirmed: false }
+  if (action === 'refresh-materialized-view') return { kind: action, schema: advancedSchema, name: advancedName, ...(data.has('concurrently') ? { concurrently: true } : {}), confirmed: false }
+  if (action === 'drop-materialized-view') return { kind: action, schema: advancedSchema, name: advancedName, ...cascade, confirmed: false }
+  if (action === 'create-sequence') return { kind: action, schema: advancedSchema, name: advancedName, ...(number('start') === undefined ? {} : { start: number('start') }), ...(number('increment') === undefined ? {} : { increment: number('increment') }), ...(number('cache') === undefined ? {} : { cache: number('cache') }), ...(data.has('cycle') ? { cycle: true } : {}) }
+  if (action === 'drop-sequence') return { kind: action, schema: advancedSchema, name: advancedName, ...cascade, confirmed: false }
+  if (action === 'create-enum') return { kind: action, schema: advancedSchema, name: advancedName, values: list('values') }
+  if (action === 'create-domain') return { kind: action, schema: advancedSchema, name: advancedName, baseType: { name: value('baseType') }, nullable: data.has('nullable'), ...(value('domainCheck') ? { check: value('domainCheck') } : {}), confirmed: false }
+  if (action === 'drop-type') return { kind: action, schema: advancedSchema, name: advancedName, ...cascade, confirmed: false }
+  if (action === 'create-extension') return { kind: action, name: advancedName, ...(value('extensionSchema') ? { schema: value('extensionSchema') } : {}), ...(value('version') ? { version: value('version') } : {}), ...cascade, confirmed: false }
+  if (action === 'drop-extension') return { kind: action, name: advancedName, ...cascade, confirmed: false }
+  if (action === 'create-routine') {
+    const routineKind = value('routineKind')
+    const returnType = value('returnType')
+    return { kind: action, routineKind, schema: advancedSchema, name: advancedName, arguments: list('argumentTypes').map((type) => ({ type: { name: type } })), ...(returnType ? { returns: { name: returnType } } : {}), ...(capabilities?.engine === 'postgres' && value('language') ? { language: value('language') } : {}), body: value('body'), confirmed: false }
+  }
+  if (action === 'drop-routine') return { kind: action, routineKind: value('routineKind'), schema: advancedSchema, name: advancedName, argumentTypes: list('argumentTypes').map((name) => ({ name })), ...cascade, confirmed: false }
+  if (action === 'create-trigger') return { kind: action, schema: advancedSchema, table: value('advancedTable'), name: advancedName, timing: value('timing'), events: list('events'), forEach: value('forEach'), ...(capabilities?.engine === 'postgres' ? { functionSchema: value('functionSchema'), functionName: value('functionName') } : { body: value('body') }), confirmed: false }
+  if (action === 'drop-trigger') return { kind: action, schema: advancedSchema, table: value('advancedTable'), name: advancedName, confirmed: false }
+  if (action === 'create-event') return { kind: action, schema: advancedSchema, name: advancedName, schedule: value('scheduleKind') === 'at' ? { kind: 'at', at: value('scheduleAt') } : { kind: 'every', amount: Number(value('scheduleAmount')), unit: value('scheduleUnit') }, preserve: data.has('preserve'), enabled: data.has('enabled'), body: value('body'), confirmed: false }
+  if (action === 'drop-event') return { kind: action, schema: advancedSchema, name: advancedName, confirmed: false }
+  if (action === 'create-partition') return { kind: action, schema: advancedSchema, table: value('advancedTable'), name: advancedName, definition: value('definition'), confirmed: false }
+  if (action === 'drop-partition') return { kind: action, schema: advancedSchema, table: value('advancedTable'), name: advancedName, confirmed: false }
   if (action.endsWith('-database')) {
     if (action === 'rename-database') return { kind: action, from: value('from'), to: value('to') }
     return { kind: action, name: value('name'), ...(action === 'drop-database' ? { confirmed: false } : {}) }
@@ -406,25 +459,48 @@ function requiresDdlConfirmation(command: Record<string, unknown>): boolean {
   if (String(command.kind).startsWith('drop-')) return true
   if (command.kind === 'create-index') return command.method !== 'btree' || Boolean(command.predicate) || 'expression' in ((command.parts as object[])[0] ?? {})
   if (command.kind === 'add-constraint') return (command.constraint as { kind: string }).kind !== 'unique'
+  if (command.kind === 'create-domain') return Boolean(command.check)
+  if (['create-view', 'create-materialized-view', 'refresh-materialized-view', 'create-extension', 'create-routine', 'create-trigger', 'create-event', 'create-partition'].includes(String(command.kind))) return true
   return false
 }
 
-function ddlActionSupported(action: CoreDdlAction, capabilities?: DdlCapabilities): boolean {
+function ddlActionSupported(action: DdlAction, capabilities?: DdlCapabilities): boolean {
   if (!capabilities) return false
   const operation = action.split('-')[0] as 'create' | 'rename' | 'drop' | 'add'
   const object = action.split('-')[1] as 'database' | 'schema' | 'table' | 'column' | 'index' | 'constraint'
   if (object === 'database' || object === 'schema' || object === 'table') return operation === 'add' || capabilities[object][operation]
   if (object === 'column') return operation !== 'rename' || capabilities.column.rename
+  const advancedCapability = {
+    'create-view': 'view', 'drop-view': 'view',
+    'create-materialized-view': 'materializedView', 'refresh-materialized-view': 'materializedView', 'drop-materialized-view': 'materializedView',
+    'create-sequence': 'sequence', 'drop-sequence': 'sequence',
+    'create-enum': 'enum', 'create-domain': 'domain', 'drop-type': capabilities.advanced.enum ? 'enum' : 'domain',
+    'create-extension': 'extension', 'drop-extension': 'extension',
+    'create-routine': capabilities.advanced.function ? 'function' : 'procedure', 'drop-routine': capabilities.advanced.function ? 'function' : 'procedure',
+    'create-trigger': 'trigger', 'drop-trigger': 'trigger',
+    'create-event': 'event', 'drop-event': 'event',
+    'create-partition': 'partition', 'drop-partition': 'partition',
+  } as const
+  if (action in advancedCapability) return capabilities.advanced[advancedCapability[action as keyof typeof advancedCapability]]
   return true
 }
 
-function ddlActionLabel(action: CoreDdlAction) {
+function ddlActionLabel(action: DdlAction) {
   const labels = {
     'create-database': 'ddlCreateDatabase', 'rename-database': 'ddlRenameDatabase', 'drop-database': 'ddlDropDatabase',
     'create-schema': 'ddlCreateSchema', 'rename-schema': 'ddlRenameSchema', 'drop-schema': 'ddlDropSchema',
     'create-table': 'ddlCreateTable', 'rename-table': 'ddlRenameTable', 'drop-table': 'ddlDropTable',
     'add-column': 'ddlAddColumn', 'rename-column': 'ddlRenameColumn', 'drop-column': 'ddlDropColumn',
     'create-index': 'ddlCreateIndex', 'drop-index': 'ddlDropIndex', 'add-constraint': 'ddlAddConstraint', 'drop-constraint': 'ddlDropConstraint',
+    'create-view': 'ddlCreateView', 'drop-view': 'ddlDropView',
+    'create-materialized-view': 'ddlCreateMaterializedView', 'refresh-materialized-view': 'ddlRefreshMaterializedView', 'drop-materialized-view': 'ddlDropMaterializedView',
+    'create-sequence': 'ddlCreateSequence', 'drop-sequence': 'ddlDropSequence',
+    'create-enum': 'ddlCreateEnum', 'create-domain': 'ddlCreateDomain', 'drop-type': 'ddlDropType',
+    'create-extension': 'ddlCreateExtension', 'drop-extension': 'ddlDropExtension',
+    'create-routine': 'ddlCreateRoutine', 'drop-routine': 'ddlDropRoutine',
+    'create-trigger': 'ddlCreateTrigger', 'drop-trigger': 'ddlDropTrigger',
+    'create-event': 'ddlCreateEvent', 'drop-event': 'ddlDropEvent',
+    'create-partition': 'ddlCreatePartition', 'drop-partition': 'ddlDropPartition',
   } as const
   return labels[action]
 }

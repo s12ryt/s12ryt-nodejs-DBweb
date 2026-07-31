@@ -89,6 +89,19 @@ export interface DdlCapabilities {
   column: { generated: boolean; identity: boolean; rename: boolean; renameSyntax: 'rename-column' | 'change-column' }
   constraint: { check: boolean; foreignKey: boolean; primaryKey: boolean; unique: boolean }
   index: { methods: string[]; expression: boolean; partial: boolean; prefixLength: boolean }
+  advanced: {
+    view: boolean
+    materializedView: boolean
+    sequence: boolean
+    enum: boolean
+    domain: boolean
+    function: boolean
+    procedure: boolean
+    trigger: boolean
+    partition: boolean
+    extension: boolean
+    event: boolean
+  }
 }
 
 export interface QueryResult {
