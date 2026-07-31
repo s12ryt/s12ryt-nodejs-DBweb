@@ -291,7 +291,7 @@ class MysqlSqlDumpSnapshotSession implements SqlDumpSnapshotSession {
        FROM information_schema.partitions
        WHERE ${clauses.join(' AND ')}
        ORDER BY table_name, partition_ordinal_position`, values))
-    return rows.map(mapPartitionObject)
+    return mapPartitionObjects(rows)
   }
 
   private async *streamTable(
@@ -612,7 +612,29 @@ function mapEventSchedule(row: Record<string, unknown>): DdlEventSchedule {
   return { kind: 'every', amount, unit: unit as Extract<DdlEventSchedule, { kind: 'every' }>['unit'] }
 }
 
-function mapPartitionObject(row: Record<string, unknown>): SqlDumpObject {
+function mapPartitionObjects(rows: Record<string, unknown>[]): SqlDumpObject[] {
+  const partitioningByTable = new Map<string, { method: 'range' | 'list'; expression: string }>()
+  return rows.map((row) => {
+    const schema = requiredString(row.dbweb_partition_schema)
+    const table = requiredString(row.dbweb_partition_table)
+    const rawMethod = requiredString(row.dbweb_partition_method).toLowerCase()
+    if (rawMethod !== 'range' && rawMethod !== 'list') failed()
+    const method: 'range' | 'list' = rawMethod
+    const expression = requiredString(row.dbweb_partition_expression).trim()
+    if (!expression) failed()
+    const tableKey = `${schema}\0${table}`
+    const existing = partitioningByTable.get(tableKey)
+    if (existing !== undefined && (existing.method !== method || existing.expression !== expression)) failed()
+    const initialize = existing === undefined ? { method, expression } : undefined
+    partitioningByTable.set(tableKey, { method, expression })
+    return mapPartitionObject(row, initialize)
+  })
+}
+
+function mapPartitionObject(
+  row: Record<string, unknown>,
+  initialize: { method: 'range' | 'list'; expression: string } | undefined,
+): SqlDumpObject {
   const schema = requiredString(row.dbweb_partition_schema)
   const table = requiredString(row.dbweb_partition_table)
   const name = requiredString(row.dbweb_partition_name)
@@ -623,7 +645,10 @@ function mapPartitionObject(row: Record<string, unknown>): SqlDumpObject {
   return {
     id: `partition:${schema}.${table}.${name}`, kind: 'partition', schema, name,
     dependencies: [`table:${schema}.${table}`],
-    createCommands: [{ kind: 'create-partition', schema, table, name, definition, confirmed: true }],
+    createCommands: [{
+      kind: 'create-partition', schema, table, name, definition,
+      ...(initialize === undefined ? {} : { initialize }), confirmed: true,
+    }],
     dropCommand: { kind: 'drop-partition', schema, table, name, confirmed: true },
   }
 }

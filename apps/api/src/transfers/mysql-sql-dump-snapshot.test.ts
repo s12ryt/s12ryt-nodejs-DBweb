@@ -178,11 +178,18 @@ describe('MySQL SQL dump snapshot', () => {
           dbweb_interval_value: '1', dbweb_interval_field: 'DAY',
           dbweb_on_completion: 'PRESERVE', dbweb_status: 'ENABLED',
         }])
-        else if (sql.includes('dbweb_partition_name')) done(undefined, [{
-          dbweb_partition_schema: 'app', dbweb_partition_table: 'orders',
-          dbweb_partition_name: 'p2026', dbweb_partition_method: 'RANGE',
-          dbweb_partition_expression: 'id', dbweb_partition_description: '1000',
-        }])
+        else if (sql.includes('dbweb_partition_name')) done(undefined, [
+          {
+            dbweb_partition_schema: 'app', dbweb_partition_table: 'orders',
+            dbweb_partition_name: 'p2026', dbweb_partition_method: 'RANGE',
+            dbweb_partition_expression: 'id', dbweb_partition_description: '1000',
+          },
+          {
+            dbweb_partition_schema: 'app', dbweb_partition_table: 'orders',
+            dbweb_partition_name: 'pmax', dbweb_partition_method: 'RANGE',
+            dbweb_partition_expression: 'id', dbweb_partition_description: 'MAXVALUE',
+          },
+        ])
         else done(undefined, [])
         return undefined
       }),
@@ -206,6 +213,7 @@ describe('MySQL SQL dump snapshot', () => {
       'trigger:app.orders.orders_audit',
       'event:app.purge_orders',
       'partition:app.orders.p2026',
+      'partition:app.orders.pmax',
     ])
     expect(snapshot.manifest.objects.find((object) => object.id === 'view:app.active_orders')).toEqual(expect.objectContaining({
       dependencies: ['table:app.orders'],
@@ -229,7 +237,13 @@ describe('MySQL SQL dump snapshot', () => {
     expect(snapshot.manifest.objects.find((object) => object.id === 'partition:app.orders.p2026')?.createCommands[0])
       .toEqual({
         kind: 'create-partition', schema: 'app', table: 'orders', name: 'p2026',
-        definition: 'VALUES LESS THAN (1000)', confirmed: true,
+        definition: 'VALUES LESS THAN (1000)',
+        initialize: { method: 'range', expression: 'id' }, confirmed: true,
+      })
+    expect(snapshot.manifest.objects.find((object) => object.id === 'partition:app.orders.pmax')?.createCommands[0])
+      .toEqual({
+        kind: 'create-partition', schema: 'app', table: 'orders', name: 'pmax',
+        definition: 'VALUES LESS THAN (MAXVALUE)', confirmed: true,
       })
   })
 })
