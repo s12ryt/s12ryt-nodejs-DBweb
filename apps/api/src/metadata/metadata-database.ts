@@ -83,11 +83,28 @@ interface SshHostKeyResetsTable {
   created_at: string
 }
 
+interface MutationAuditsTable {
+  id: string
+  actor_id: string
+  connection_id: string
+  object_type: 'table'
+  object_name: string
+  action: 'mutate-rows'
+  operation_count: number
+  affected_rows: number
+  status: 'success' | 'failed'
+  encrypted_sql_templates: string
+  error_code: string | null
+  created_at: string
+  expires_at: string
+}
+
 export interface MetadataDatabase {
   users: UsersTable
   sessions: SessionsTable
   connections: ConnectionsTable
   keepalive_events: KeepAliveEventsTable
+  mutation_audits: MutationAuditsTable
   query_audits: QueryAuditsTable
   ssh_host_key_resets: SshHostKeyResetsTable
   ssh_known_hosts: SshKnownHostsTable
@@ -236,9 +253,34 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .execute()
 
   await database.schema
+    .createTable('mutation_audits')
+    .ifNotExists()
+    .addColumn('id', 'varchar(36)', (column) => column.primaryKey())
+    .addColumn('actor_id', 'varchar(36)', (column) => column.notNull())
+    .addColumn('connection_id', 'varchar(36)', (column) => column.notNull())
+    .addColumn('object_type', 'varchar(32)', (column) => column.notNull())
+    .addColumn('object_name', 'varchar(512)', (column) => column.notNull())
+    .addColumn('action', 'varchar(64)', (column) => column.notNull())
+    .addColumn('operation_count', 'integer', (column) => column.notNull())
+    .addColumn('affected_rows', 'integer', (column) => column.notNull())
+    .addColumn('status', 'varchar(16)', (column) => column.notNull())
+    .addColumn('encrypted_sql_templates', 'text', (column) => column.notNull())
+    .addColumn('error_code', 'varchar(64)')
+    .addColumn('created_at', 'varchar(35)', (column) => column.notNull())
+    .addColumn('expires_at', 'varchar(35)', (column) => column.notNull())
+    .execute()
+
+  await database.schema
     .createIndex('query_audits_expires_at_index')
     .ifNotExists()
     .on('query_audits')
+    .column('expires_at')
+    .execute()
+
+  await database.schema
+    .createIndex('mutation_audits_expires_at_index')
+    .ifNotExists()
+    .on('mutation_audits')
     .column('expires_at')
     .execute()
 
