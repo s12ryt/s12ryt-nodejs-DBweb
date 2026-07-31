@@ -6,6 +6,14 @@ import { fileURLToPath } from 'node:url'
 import type { FastifyInstance } from 'fastify'
 
 import { WebAccessService } from './access/web-access-service.js'
+import { NativeAccountCredentialVault } from './accounts/native-account-credential.js'
+import { MysqlNativeAccountGateway } from './accounts/mysql-native-account-gateway.js'
+import { NativeAccountService } from './accounts/native-account-service.js'
+import {
+  NativeAccountVerificationScheduler,
+  NativeAccountVerifier,
+} from './accounts/native-account-verifier.js'
+import { PostgresNativeAccountGateway } from './accounts/postgres-native-account-gateway.js'
 import { buildApp } from './app.js'
 import { EncryptedQueryAuditRecorder } from './audit/query-audit.js'
 import { AuthService } from './auth/auth-service.js'
@@ -31,6 +39,7 @@ import { KyselyConnectionRepository } from './metadata/kysely-connection-reposit
 import { KyselyDdlAuditRepository } from './metadata/kysely-ddl-audit-repository.js'
 import { KyselyKeepAliveEventRepository } from './metadata/kysely-keepalive-event-repository.js'
 import { KyselyMutationAuditRepository } from './metadata/kysely-mutation-audit-repository.js'
+import { KyselyNativeAccountRepository } from './metadata/kysely-native-account-repository.js'
 import { KyselyQueryAuditRepository } from './metadata/kysely-query-audit-repository.js'
 import { KyselySecurityAuditRepository } from './metadata/kysely-security-audit-repository.js'
 import {
@@ -141,6 +150,7 @@ export async function buildRuntime(
   }
   const database = createMetadataDatabase(config.metadata)
   let tunnelPool: SshTunnelPool | undefined
+  let nativeAccountScheduler: NativeAccountVerificationScheduler | undefined
   try {
     await migrateMetadata(database)
     const encryption = new EnvelopeEncryption(config.masterKey)
@@ -229,6 +239,31 @@ export async function buildRuntime(
       sqlGateways,
       audit,
     )
+    const nativeAccountRepository = new KyselyNativeAccountRepository(database)
+    const nativeAccountCredentials = new NativeAccountCredentialVault(encryption)
+    const nativeAccountGateways = {
+      postgres: new PostgresNativeAccountGateway(undefined, socketProvider),
+      mysql: new MysqlNativeAccountGateway(undefined, socketProvider),
+    }
+    const nativeAccountService = new NativeAccountService(
+      connectionService,
+      nativeAccountGateways,
+      nativeAccountRepository,
+      nativeAccountCredentials,
+      (actor, connectionId) => webAccessService.can(actor, connectionId, 'account-manage'),
+      undefined,
+      (actorId, password) => authService.verifyOwnPassword(actorId, password),
+      securityAudit,
+    )
+    const nativeAccountVerifier = new NativeAccountVerifier(
+      connectionService,
+      nativeAccountGateways,
+      nativeAccountRepository,
+      nativeAccountCredentials,
+      undefined,
+      securityAudit,
+    )
+    nativeAccountScheduler = new NativeAccountVerificationScheduler(nativeAccountVerifier)
     const keepAliveService = new SqlKeepAliveService(
       connectionService,
       sqlGateways,
@@ -245,6 +280,7 @@ export async function buildRuntime(
       dataMutationService,
       ddlService,
       queryService,
+      nativeAccountService,
       sshKnownHostService: knownHosts,
       webAccessService,
       csrfSecret,
@@ -252,13 +288,16 @@ export async function buildRuntime(
       ...(config.staticRoot ? { staticRoot: config.staticRoot } : {}),
     })
     keepAliveScheduler.start()
+    nativeAccountScheduler.start()
     app.addHook('onClose', async () => {
+      await nativeAccountScheduler?.stop()
       await keepAliveScheduler.stop()
       await tunnelPool?.close()
       await database.destroy()
     })
     return app
   } catch (error) {
+    await nativeAccountScheduler?.stop()
     await tunnelPool?.close()
     await database.destroy()
     throw error
