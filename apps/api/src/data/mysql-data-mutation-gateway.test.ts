@@ -22,15 +22,15 @@ describe('MysqlDataMutationGateway', () => {
     const query = vi
       .fn()
       .mockResolvedValueOnce([[{
-        column_name: 'id', data_type: 'bigint', column_type: 'bigint(20)', is_nullable: 'NO', extra: 'auto_increment',
+        dbweb_column_name: 'id', dbweb_data_type: 'bigint', dbweb_column_type: 'bigint(20)', dbweb_is_nullable: 'NO', dbweb_extra: 'auto_increment',
       }, {
-        column_name: 'email', data_type: 'varchar', column_type: 'varchar(255)', is_nullable: 'NO', extra: '',
+        dbweb_column_name: 'email', dbweb_data_type: 'varchar', dbweb_column_type: 'varchar(255)', dbweb_is_nullable: 'NO', dbweb_extra: '',
       }, {
-        column_name: 'payload', data_type: 'json', column_type: 'json', is_nullable: 'YES', extra: '',
+        dbweb_column_name: 'payload', dbweb_data_type: 'json', dbweb_column_type: 'json', dbweb_is_nullable: 'YES', dbweb_extra: '',
       }], []])
       .mockResolvedValueOnce([[
-        { key_name: 'PRIMARY', non_unique: 0, column_name: 'id', sequence: 1 },
-        { key_name: 'orders_email_key', non_unique: 0, column_name: 'email', sequence: 1 },
+        { dbweb_key_name: 'PRIMARY', dbweb_column_name: 'id', dbweb_sequence: 1 },
+        { dbweb_key_name: 'orders_email_key', dbweb_column_name: 'email', dbweb_sequence: 1 },
       ], []])
     const client = {
       query,
@@ -54,6 +54,8 @@ describe('MysqlDataMutationGateway', () => {
         { name: 'orders_email_key', kind: 'unique', columns: ['email'] },
       ],
     })
+    expect(query.mock.calls[0]?.[0]).toContain('column_name AS dbweb_column_name')
+    expect(query.mock.calls[1]?.[0]).toContain('index_name AS dbweb_key_name')
     expect(query.mock.calls[0]?.[1]).toEqual(['app', 'orders'])
     expect(query.mock.calls[1]?.[1]).toEqual(['app', 'orders'])
     expect(client.end).toHaveBeenCalledOnce()

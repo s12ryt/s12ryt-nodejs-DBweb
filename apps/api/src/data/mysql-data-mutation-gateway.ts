@@ -44,15 +44,20 @@ export class MysqlDataMutationGateway implements DataMutationGateway {
   ): Promise<MutationTable> {
     return this.withConnection(connection, async (client) => {
       const [rawColumns] = await client.query(
-        `SELECT column_name, data_type, column_type, is_nullable, extra
+        `SELECT column_name AS dbweb_column_name,
+                data_type AS dbweb_data_type,
+                column_type AS dbweb_column_type,
+                is_nullable AS dbweb_is_nullable,
+                extra AS dbweb_extra
          FROM information_schema.columns
          WHERE table_schema = ? AND table_name = ?
          ORDER BY ordinal_position`,
         [schema, table],
       )
       const [rawKeys] = await client.query(
-        `SELECT index_name AS key_name, non_unique, column_name,
-                seq_in_index AS sequence
+        `SELECT index_name AS dbweb_key_name,
+                column_name AS dbweb_column_name,
+                seq_in_index AS dbweb_sequence
          FROM information_schema.statistics
          WHERE table_schema = ? AND table_name = ? AND non_unique = 0
          ORDER BY index_name = 'PRIMARY' DESC, index_name, seq_in_index`,
@@ -63,10 +68,10 @@ export class MysqlDataMutationGateway implements DataMutationGateway {
         schema,
         name: table,
         columns: columns.map((row) => ({
-          name: String(row.column_name),
-          valueType: mysqlValueType(String(row.data_type), String(row.column_type)),
-          nullable: row.is_nullable === 'YES',
-          generated: /(?:auto_increment|generated)/i.test(String(row.extra ?? '')),
+           name: String(row.dbweb_column_name),
+           valueType: mysqlValueType(String(row.dbweb_data_type), String(row.dbweb_column_type)),
+           nullable: row.dbweb_is_nullable === 'YES',
+           generated: /(?:auto_increment|generated)/i.test(String(row.dbweb_extra ?? '')),
         })),
         uniqueKeys: mapMysqlKeys(asRows(rawKeys)),
       }
@@ -176,12 +181,15 @@ function mysqlValueType(dataType: string, columnType: string): DatabaseValueType
 function mapMysqlKeys(rows: Array<Record<string, unknown>>): MutationUniqueKey[] {
   const keys = new Map<string, { kind: 'primary' | 'unique'; columns: Array<{ name: string; sequence: number }> }>()
   for (const row of rows) {
-    const name = String(row.key_name)
+    const name = String(row.dbweb_key_name)
     const current = keys.get(name) ?? {
       kind: name === 'PRIMARY' ? 'primary' as const : 'unique' as const,
       columns: [],
     }
-    current.columns.push({ name: String(row.column_name), sequence: Number(row.sequence) })
+    current.columns.push({
+      name: String(row.dbweb_column_name),
+      sequence: Number(row.dbweb_sequence),
+    })
     keys.set(name, current)
   }
   return [...keys].map(([name, key]) => ({
