@@ -282,17 +282,19 @@ function ConnectionWorkspace({ connection, locale, csrfToken, isAdmin }: { conne
       {tab === 'query' && <QueryEditor connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
       {tab === 'structure' && isAdmin && <DdlWorkbench connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
       {tab === 'accounts' && <NativeAccountWorkbench connection={connection} locale={locale} csrfToken={csrfToken} isAdmin={isAdmin} />}
-      {tab === 'transfers' && <TransferWorkbench connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
+      {tab === 'transfers' && <TransferWorkbench connection={connection} locale={locale} csrfToken={csrfToken} />}
       {confirmingReset && <ConfirmDialog title={t('sshReset')} body={t('sshResetBody')} confirm={t('sshResetConfirm')} cancel={t('cancel')} onCancel={() => setConfirmingReset(false)} onConfirm={() => void resetSshHostKey()} />}
     </div>
   )
 }
 
-function TransferWorkbench({ connectionId, locale, csrfToken }: { connectionId: string; locale: Locale; csrfToken: string }) {
+function TransferWorkbench({ connection, locale, csrfToken }: { connection: ConnectionProfile; locale: Locale; csrfToken: string }) {
   const t = translations(locale)
+  const connectionId = connection.id
   const [jobs, setJobs] = useState<TransferJob[]>([])
   const [direction, setDirection] = useState<TransferDirection>('export')
   const [format, setFormat] = useState<TransferFormat>('csv')
+  const [includeData, setIncludeData] = useState(true)
   const [error, setError] = useState('')
   const [uploadingJobId, setUploadingJobId] = useState<string>()
   const [uploadedBytes, setUploadedBytes] = useState(0)
@@ -314,7 +316,8 @@ function TransferWorkbench({ connectionId, locale, csrfToken }: { connectionId: 
     event.preventDefault()
     try {
       const created = await apiRequest<TransferJob>('/api/transfers', {
-        method: 'POST', locale, csrfToken, body: { connectionId, direction, format },
+        method: 'POST', locale, csrfToken,
+        body: { connectionId, direction, format, ...(format === 'sql' ? { includeData } : {}) },
       })
       setJobs((current) => [created, ...current.filter((job) => job.id !== created.id)])
       setError('')
@@ -354,6 +357,7 @@ function TransferWorkbench({ connectionId, locale, csrfToken }: { connectionId: 
     <form className="transfer-toolbar" onSubmit={(event) => void createJob(event)}>
       <Field label={t('direction')}><select value={direction} onChange={(event) => setDirection(event.target.value as TransferDirection)}><option value="export">export</option><option value="import">import</option></select></Field>
       <Field label={t('format')}><select value={format} onChange={(event) => setFormat(event.target.value as TransferFormat)}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">SQL</option></select></Field>
+      {direction === 'export' && format === 'sql' && <label className="check-field"><input type="checkbox" checked={includeData} onChange={(event) => setIncludeData(event.target.checked)} />{t('includeData')}</label>}
       <button className="primary-button" type="submit"><Plus size={16} />{t('createJob')}</button>
     </form>
     {error && <div className="inline-error" role="alert">{error}</div>}
@@ -366,16 +370,21 @@ function TransferWorkbench({ connectionId, locale, csrfToken }: { connectionId: 
           <span className={`status transfer-status ${job.status}`}>{job.status}</span>
           <div className="transfer-progress"><span>{job.processedRows} {t('rowUnit')}</span><span>{job.processedBytes} B</span></div>
           <div className="transfer-actions">
-            {job.direction === 'import' && job.status === 'queued' && <label className="file-command">{t('sourceFile')}<input type="file" disabled={uploadingJobId === job.id} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadSource(job, file) }} /></label>}
+            {job.direction === 'import' && job.status === 'queued' && !job.uploadCompletedAt && <label className="file-command">{t('sourceFile')}<input type="file" disabled={uploadingJobId === job.id} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadSource(job, file) }} /></label>}
             {uploadingJobId === job.id && <span className="upload-progress">{uploadedBytes} B</span>}
-            {job.direction === 'export' && job.format === 'csv' && job.status === 'queued' && <button type="button" aria-label={`${t('configureExport')} ${label}`} onClick={() => setConfiguring(job)}>{t('configureExport')}</button>}
+            {job.status === 'queued' && (
+              (job.direction === 'export' && (job.format === 'csv' || job.format === 'sql'))
+              || (job.direction === 'import' && job.format === 'sql' && Boolean(job.uploadCompletedAt))
+            ) && <button type="button" aria-label={`${t('configureExport')} ${label}`} onClick={() => setConfiguring(job)}>{t('configureExport')}</button>}
             {job.direction === 'export' && job.status === 'succeeded' && <a className="button-link" href={`/api/transfers/${encodeURIComponent(job.id)}/download`} aria-label={`${t('download')} ${label}`}><Download size={15} />{t('download')}</a>}
             {active && <button type="button" aria-label={`${t('cancelJob')} ${label}`} onClick={() => void cancelJob(job)}>{t('cancelJob')}</button>}
           </div>
         </article>
       })}
     </div>
-    {configuring && <FriendlyCsvExportDialog job={configuring} locale={locale} csrfToken={csrfToken} onClose={() => setConfiguring(undefined)} onExecuted={async () => { setConfiguring(undefined); await load() }} />}
+    {configuring && configuring.format === 'csv' && configuring.direction === 'export' && <FriendlyCsvExportDialog job={configuring} locale={locale} csrfToken={csrfToken} onClose={() => setConfiguring(undefined)} onExecuted={async () => { setConfiguring(undefined); await load() }} />}
+    {configuring && configuring.format === 'sql' && configuring.direction === 'export' && <SqlDumpExportDialog job={configuring} locale={locale} csrfToken={csrfToken} onClose={() => setConfiguring(undefined)} onExecuted={async () => { setConfiguring(undefined); await load() }} />}
+    {configuring && configuring.format === 'sql' && configuring.direction === 'import' && <SqlRestoreDialog job={configuring} defaultDatabase={connection.database} locale={locale} csrfToken={csrfToken} onClose={() => setConfiguring(undefined)} onExecuted={async () => { setConfiguring(undefined); await load() }} />}
   </section>
 }
 
@@ -443,6 +452,139 @@ function FriendlyCsvExportDialog({ job, locale, csrfToken, onClose, onExecuted }
       </div>
     </form>
   </Modal>
+}
+
+function SqlDumpExportDialog({ job, locale, csrfToken, onClose, onExecuted }: {
+  job: TransferJob
+  locale: Locale
+  csrfToken: string
+  onClose(): void
+  onExecuted(): Promise<void>
+}) {
+  const t = translations(locale)
+  const [scope, setScope] = useState<'table' | 'schema' | 'database'>('database')
+  const [schema, setSchema] = useState('')
+  const [table, setTable] = useState('')
+  const [compression, setCompression] = useState<'none' | 'gzip'>('gzip')
+  const [preview, setPreview] = useState<TransferPreviewResult>()
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function createPreview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(''); setPreview(undefined)
+    try {
+      const dumpScope = scope === 'database'
+        ? { kind: 'database' }
+        : scope === 'schema'
+          ? { kind: 'schema', schema }
+          : { kind: 'table', schema, table }
+      setPreview(await apiRequest<TransferPreviewResult>(`/api/transfers/${encodeURIComponent(job.id)}/preview`, {
+        method: 'POST', locale, csrfToken,
+        body: { mapping: {}, strategy: { compression }, target: { scope: dumpScope } },
+      }))
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function execute() {
+    if (!preview) return
+    setBusy(true); setError('')
+    try {
+      await apiRequest<TransferOutputResult>(`/api/transfers/${encodeURIComponent(job.id)}/execute`, {
+        method: 'POST', locale, csrfToken, body: { previewToken: preview.token },
+      })
+      await onExecuted()
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <Modal title={t('configureSqlDump')} onClose={onClose}>
+    <form className="transfer-preview-form" onSubmit={(event) => void createPreview(event)}>
+      <Field label={t('dumpScope')}><select value={scope} onChange={(event) => setScope(event.target.value as typeof scope)}><option value="database">database</option><option value="schema">schema</option><option value="table">table</option></select></Field>
+      <Field label={t('compression')}><select value={compression} onChange={(event) => setCompression(event.target.value as typeof compression)}><option value="gzip">gzip</option><option value="none">none</option></select></Field>
+      {scope !== 'database' && <Field label={t('ddlSchemaName')}><input required value={schema} onChange={(event) => setSchema(event.target.value)} /></Field>}
+      {scope === 'table' && <Field label={t('ddlTableName')}><input required value={table} onChange={(event) => setTable(event.target.value)} /></Field>}
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      {preview && <TransferPreviewSummary preview={preview} t={t} />}
+      <div className="dialog-actions"><button type="button" onClick={onClose}>{t('cancel')}</button><button className="primary-button" type="submit" disabled={busy}>{t('createPreview')}</button>{preview && <button className="primary-button" type="button" disabled={busy} onClick={() => void execute()}>{t('executeExport')}</button>}</div>
+    </form>
+  </Modal>
+}
+
+function SqlRestoreDialog({ job, defaultDatabase, locale, csrfToken, onClose, onExecuted }: {
+  job: TransferJob
+  defaultDatabase: string
+  locale: Locale
+  csrfToken: string
+  onClose(): void
+  onExecuted(): Promise<void>
+}) {
+  const t = translations(locale)
+  const [database, setDatabase] = useState(defaultDatabase)
+  const [mode, setMode] = useState<'stop' | 'drop-and-recreate'>('stop')
+  const [confirmationDatabase, setConfirmationDatabase] = useState('')
+  const [skipUnsupported, setSkipUnsupported] = useState(false)
+  const [preview, setPreview] = useState<TransferPreviewResult>()
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function createPreview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(''); setPreview(undefined)
+    try {
+      setPreview(await apiRequest<TransferPreviewResult>(`/api/transfers/${encodeURIComponent(job.id)}/preview`, {
+        method: 'POST', locale, csrfToken,
+        body: {
+          mapping: {},
+          strategy: { mode, ...(mode === 'drop-and-recreate' ? { confirmationDatabase } : {}), skipUnsupported },
+          target: { database },
+        },
+      }))
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function execute() {
+    if (!preview) return
+    setBusy(true); setError('')
+    try {
+      await apiRequest<unknown>(`/api/transfers/${encodeURIComponent(job.id)}/execute`, {
+        method: 'POST', locale, csrfToken, body: { previewToken: preview.token },
+      })
+      await onExecuted()
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <Modal title={t('configureSqlRestore')} onClose={onClose}>
+    <form className="transfer-preview-form" onSubmit={(event) => void createPreview(event)}>
+      <Field label={t('targetDatabase')}><input required value={database} onChange={(event) => setDatabase(event.target.value)} /></Field>
+      <Field label={t('existingObjectMode')}><select value={mode} onChange={(event) => { setMode(event.target.value as typeof mode); setPreview(undefined) }}><option value="stop">stop</option><option value="drop-and-recreate">drop-and-recreate</option></select></Field>
+      {mode === 'drop-and-recreate' && <Field label={t('confirmTargetDatabase')}><input required value={confirmationDatabase} onChange={(event) => setConfirmationDatabase(event.target.value)} /></Field>}
+      <label className="check-field"><input type="checkbox" checked={skipUnsupported} onChange={(event) => setSkipUnsupported(event.target.checked)} />{t('skipUnsupported')}</label>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      {preview && <TransferPreviewSummary preview={preview} t={t} />}
+      <div className="dialog-actions"><button type="button" onClick={onClose}>{t('cancel')}</button><button className="primary-button" type="submit" disabled={busy}>{t('createPreview')}</button>{preview && <button className="danger-button" type="button" disabled={busy} onClick={() => void execute()}>{t('executeRestore')}</button>}</div>
+    </form>
+  </Modal>
+}
+
+function TransferPreviewSummary({ preview, t }: { preview: TransferPreviewResult; t: ReturnType<typeof translations> }) {
+  return <div className="transfer-preview-summary">
+    <strong>{t('estimated')}</strong><span>{preview.estimatedRows} {t('rowUnit')}</span><span>{preview.estimatedTables} {t('tableUnit')}</span><span>{preview.estimatedBytes} B</span>
+    {preview.issues.length > 0 && <ul className="transfer-preview-issues">{preview.issues.map((issue, index) => <li key={`${issue.code}-${index}`}><strong>{issue.code}</strong><span>{issue.summary}</span></li>)}</ul>}
+  </div>
 }
 
 type NativeConfirmation =

@@ -903,6 +903,134 @@ describe('DBWeb application shell', () => {
       },
     ])
   })
+
+  it('previews and executes a scoped SQL dump export', async () => {
+    const commands: Array<{ url: string; body: unknown }> = []
+    let jobs = [{
+      ...queuedTransferJob,
+      id: '44444444-4444-4444-8444-444444444444',
+      direction: 'export',
+      format: 'sql',
+      includeData: true,
+    }]
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input); const method = init?.method ?? 'GET'
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url === '/api/transfers' && method === 'GET') return Response.json(jobs)
+      if (url.endsWith('/preview') && method === 'POST') {
+        commands.push({ url, body: JSON.parse(String(init?.body)) as unknown })
+        jobs = jobs.map((job) => ({ ...job, status: 'previewed' }))
+        return Response.json({
+          token: 'v1.sql-export.signature', estimatedBytes: 0, estimatedRows: 0,
+          estimatedTables: 3, issues: [],
+        })
+      }
+      if (url.endsWith('/execute') && method === 'POST') {
+        commands.push({ url, body: JSON.parse(String(init?.body)) as unknown })
+        jobs = jobs.map((job) => ({ ...job, status: 'succeeded', processedTables: 3, processedBytes: 512 }))
+        return Response.json({ bytes: 512, chunks: 1, checksum: 'b'.repeat(64) })
+      }
+      return new Response(null, { status: 204 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText(connection.name))
+    await user.click(screen.getByRole('tab', { name: '匯入匯出' }))
+    await user.click(await screen.findByRole('button', { name: '設定 export-job' }))
+    const dialog = screen.getByRole('dialog', { name: '設定 SQL dump 匯出' })
+    await user.selectOptions(within(dialog).getByLabelText('匯出範圍'), 'schema')
+    await user.type(within(dialog).getByLabelText('Schema 名稱'), 'public')
+    await user.selectOptions(within(dialog).getByLabelText('壓縮格式'), 'gzip')
+    await user.click(within(dialog).getByRole('button', { name: '產生預覽' }))
+    expect(await within(dialog).findByText('3 個資料表')).toBeVisible()
+    await user.click(within(dialog).getByRole('button', { name: '執行匯出' }))
+    expect(await screen.findByText('succeeded')).toBeVisible()
+
+    expect(commands).toEqual([
+      {
+        url: '/api/transfers/44444444-4444-4444-8444-444444444444/preview',
+        body: {
+          mapping: {}, strategy: { compression: 'gzip' },
+          target: { scope: { kind: 'schema', schema: 'public' } },
+        },
+      },
+      {
+        url: '/api/transfers/44444444-4444-4444-8444-444444444444/execute',
+        body: { previewToken: 'v1.sql-export.signature' },
+      },
+    ])
+  })
+
+  it('previews a destructive SQL restore and requires the target database confirmation', async () => {
+    const commands: Array<{ url: string; body: unknown }> = []
+    let jobs = [{
+      ...queuedTransferJob,
+      id: '55555555-5555-4555-8555-555555555555',
+      direction: 'import',
+      format: 'sql',
+      sourceBytes: 1024,
+      sourceChecksum: 'c'.repeat(64),
+      uploadCompletedAt: '2026-07-31T00:05:00.000Z',
+    }]
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input); const method = init?.method ?? 'GET'
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url === '/api/transfers' && method === 'GET') return Response.json(jobs)
+      if (url.endsWith('/preview') && method === 'POST') {
+        commands.push({ url, body: JSON.parse(String(init?.body)) as unknown })
+        jobs = jobs.map((job) => ({ ...job, status: 'previewed' }))
+        return Response.json({
+          token: 'v1.sql-restore.signature', estimatedBytes: 1024, estimatedRows: 0,
+          estimatedTables: 1,
+          issues: [{ code: 'RESTORE_DROP', summary: 'table:public.orders' }],
+        })
+      }
+      if (url.endsWith('/execute') && method === 'POST') {
+        commands.push({ url, body: JSON.parse(String(init?.body)) as unknown })
+        jobs = jobs.map((job) => ({ ...job, status: 'succeeded', processedTables: 1, processedBytes: 1024 }))
+        return Response.json({ appliedSteps: 4 })
+      }
+      return new Response(null, { status: 204 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText(connection.name))
+    await user.click(screen.getByRole('tab', { name: '匯入匯出' }))
+    await user.click(await screen.findByRole('button', { name: '設定 import-job' }))
+    const dialog = screen.getByRole('dialog', { name: '設定 SQL restore' })
+    await user.clear(within(dialog).getByLabelText('目標資料庫'))
+    await user.type(within(dialog).getByLabelText('目標資料庫'), 'inventory_restore')
+    await user.selectOptions(within(dialog).getByLabelText('既有物件處理'), 'drop-and-recreate')
+    await user.type(within(dialog).getByLabelText('輸入目標資料庫名稱以確認'), 'inventory_restore')
+    await user.click(within(dialog).getByRole('checkbox', { name: '略過不支援物件及其相依物件' }))
+    await user.click(within(dialog).getByRole('button', { name: '產生預覽' }))
+    expect(await within(dialog).findByText('table:public.orders')).toBeVisible()
+    await user.click(within(dialog).getByRole('button', { name: '執行還原' }))
+    expect(await screen.findByText('succeeded')).toBeVisible()
+
+    expect(commands).toEqual([
+      {
+        url: '/api/transfers/55555555-5555-4555-8555-555555555555/preview',
+        body: {
+          mapping: {},
+          strategy: {
+            mode: 'drop-and-recreate', confirmationDatabase: 'inventory_restore', skipUnsupported: true,
+          },
+          target: { database: 'inventory_restore' },
+        },
+      },
+      {
+        url: '/api/transfers/55555555-5555-4555-8555-555555555555/execute',
+        body: { previewToken: 'v1.sql-restore.signature' },
+      },
+    ])
+  })
 })
 
 const authenticatedSession = {
