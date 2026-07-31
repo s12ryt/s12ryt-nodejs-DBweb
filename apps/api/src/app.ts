@@ -7,6 +7,15 @@ import staticFiles from '@fastify/static'
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify'
 
 import { type WebCapability, type WebAccessService } from './access/web-access-service.js'
+import { NativeAccountCredentialError } from './accounts/native-account-credential.js'
+import { NativeAccountGatewayError } from './accounts/native-account-gateway-error.js'
+import { NativeAccountPolicyError } from './accounts/native-account-policy.js'
+import {
+  NativeAccountServiceError,
+  type CreatedNativeAccount,
+  type NativeAccountService,
+  type StoredNativeAccount,
+} from './accounts/native-account-service.js'
 import { AuthError, type AuthService } from './auth/auth-service.js'
 import type { AuthUser, UserRole } from './auth/auth-types.js'
 import { ConnectionError, type ConnectionService } from './connections/connection-service.js'
@@ -36,6 +45,7 @@ interface BuildAppOptions {
   queryService?: SqlQueryService
   sshKnownHostService?: SshKnownHostService
   webAccessService?: WebAccessService
+  nativeAccountService?: NativeAccountService
   csrfSecret: Buffer
   production: boolean
   staticRoot?: string
@@ -79,7 +89,9 @@ const messages = {
     INVALID_QUERY: 'Invalid query parameters',
     INVALID_CSRF: 'Invalid CSRF token',
     INVALID_MUTATION: 'Invalid data mutation',
+    NATIVE_ACCOUNT_CONFIRMATION_REQUIRED: 'Native database account confirmation required',
     INVALID_SESSION: 'Authentication required',
+    INVALID_NATIVE_ACCOUNT: 'Invalid native database account',
     LAST_ENABLED_ADMIN: 'At least one enabled administrator is required',
     PASSWORD_CHANGE_REQUIRED: 'Password change required',
     SESSION_EXPIRED: 'Session expired',
@@ -89,6 +101,11 @@ const messages = {
     QUERY_TIMEOUT: 'Query timed out',
     READ_ONLY_QUERY_REQUIRED: 'Only a single read-only SQL statement is allowed',
     MUTATION_FAILED: 'Data mutation failed',
+    NATIVE_ACCOUNT_FAILED: 'Native database account operation failed',
+    ACCOUNT_NOT_FOUND: 'Native database account not found',
+    PROTECTED_ACCOUNT: 'This database account is protected',
+    REAUTHENTICATION_FAILED: 'Password verification failed',
+    RECOVERY_EXPIRED: 'The account recovery period has expired',
     ROW_CONFLICT: 'The row changed or no longer exists',
     TABLE_WITHOUT_STABLE_KEY: 'Table has no stable unique key',
     UNSUPPORTED_COLUMN: 'Column cannot be modified',
@@ -96,6 +113,7 @@ const messages = {
     USERNAME_TAKEN: 'Username is already in use',
     USER_NOT_FOUND: 'User not found',
     WEAK_PASSWORD: 'Password must contain at least 12 characters',
+    WEAK_NATIVE_ACCOUNT_PASSWORD: 'Native database account passwords must contain at least 16 characters',
   },
   'zh-TW': {
     FORBIDDEN: '權限不足',
@@ -121,7 +139,9 @@ const messages = {
     INVALID_QUERY: '查詢參數無效',
     INVALID_CSRF: 'CSRF 驗證失敗',
     INVALID_MUTATION: '資料異動內容無效',
+    NATIVE_ACCOUNT_CONFIRMATION_REQUIRED: '原生資料庫帳號操作需要二次確認',
     INVALID_SESSION: '需要登入',
+    INVALID_NATIVE_ACCOUNT: '原生資料庫帳號設定無效',
     LAST_ENABLED_ADMIN: '至少需要保留一位已啟用的管理員',
     PASSWORD_CHANGE_REQUIRED: '必須先變更密碼',
     SESSION_EXPIRED: '登入階段已過期',
@@ -131,6 +151,11 @@ const messages = {
     QUERY_TIMEOUT: '查詢逾時',
     READ_ONLY_QUERY_REQUIRED: '只允許單一唯讀 SQL 語句',
     MUTATION_FAILED: '資料異動失敗',
+    NATIVE_ACCOUNT_FAILED: '原生資料庫帳號操作失敗',
+    ACCOUNT_NOT_FOUND: '找不到原生資料庫帳號',
+    PROTECTED_ACCOUNT: '此資料庫帳號受保護',
+    REAUTHENTICATION_FAILED: '密碼驗證失敗',
+    RECOVERY_EXPIRED: '帳號復原期限已過',
     ROW_CONFLICT: '資料列已變更或不存在',
     TABLE_WITHOUT_STABLE_KEY: '資料表沒有穩定的唯一鍵',
     UNSUPPORTED_COLUMN: '欄位不可修改',
@@ -138,6 +163,7 @@ const messages = {
     USERNAME_TAKEN: '使用者名稱已被使用',
     USER_NOT_FOUND: '找不到使用者',
     WEAK_PASSWORD: '密碼至少需要 12 個字元',
+    WEAK_NATIVE_ACCOUNT_PASSWORD: '原生資料庫帳號密碼至少需要 16 個字元',
   },
 } as const
 
@@ -171,6 +197,54 @@ function handleUserLifecycleError(
   if (error.code === 'USER_NOT_FOUND') return sendError(request, reply, 404, 'USER_NOT_FOUND')
   if (error.code === 'WEAK_PASSWORD') return sendError(request, reply, 422, 'WEAK_PASSWORD')
   throw error
+}
+
+function handleNativeAccountError(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  error: unknown,
+) {
+  if (error instanceof NativeAccountGatewayError) {
+    return sendError(request, reply, 502, 'NATIVE_ACCOUNT_FAILED')
+  }
+  if (error instanceof NativeAccountCredentialError) {
+    return sendError(request, reply, 422, 'WEAK_NATIVE_ACCOUNT_PASSWORD')
+  }
+  if (error instanceof NativeAccountPolicyError) {
+    return sendError(request, reply, 422, 'INVALID_NATIVE_ACCOUNT')
+  }
+  if (!(error instanceof NativeAccountServiceError)) throw error
+  if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+  if (error.code === 'ACCOUNT_NOT_FOUND') return sendError(request, reply, 404, 'ACCOUNT_NOT_FOUND')
+  if (error.code === 'CONFIRMATION_REQUIRED') {
+    return sendError(request, reply, 409, 'NATIVE_ACCOUNT_CONFIRMATION_REQUIRED')
+  }
+  if (error.code === 'PROTECTED_ACCOUNT') {
+    return sendError(request, reply, 409, 'PROTECTED_ACCOUNT')
+  }
+  if (error.code === 'RECOVERY_EXPIRED') {
+    return sendError(request, reply, 410, 'RECOVERY_EXPIRED')
+  }
+  if (error.code === 'REAUTHENTICATION_FAILED') {
+    return sendError(request, reply, 401, 'REAUTHENTICATION_FAILED')
+  }
+  if (error.code === 'INVALID_ACCOUNT') {
+    return sendError(request, reply, 422, 'INVALID_NATIVE_ACCOUNT')
+  }
+  throw error
+}
+
+function publicManagedAccount(account: StoredNativeAccount) {
+  const { encryptedPassword: _encryptedPassword, ...publicAccount } = account
+  void _encryptedPassword
+  return publicAccount
+}
+
+function publicCreatedNativeAccount(result: CreatedNativeAccount) {
+  return {
+    account: publicManagedAccount(result.account),
+    ...(result.password === undefined ? {} : { password: result.password }),
+  }
 }
 
 function csrfTokenFor(sessionToken: string, secret: Buffer): string {
@@ -571,6 +645,333 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
         await accessService.revoke(actor, request.params.userId, request.params.connectionId)
         return reply.code(204).send()
+      },
+    )
+  }
+
+  if (options.nativeAccountService) {
+    const nativeAccounts = options.nativeAccountService
+    const connectionAccountParamsSchema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId'],
+      properties: {
+        connectionId: { type: 'string', minLength: 1, maxLength: 128 },
+      },
+    } as const
+    const managedAccountParamsSchema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['connectionId', 'accountId'],
+      properties: {
+        connectionId: { type: 'string', minLength: 1, maxLength: 128 },
+        accountId: { type: 'string', minLength: 1, maxLength: 128 },
+      },
+    } as const
+    const confirmationBodySchema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['confirmed'],
+      properties: { confirmed: { const: true } },
+    } as const
+
+    async function requireNativeAccountAccess(
+      request: FastifyRequest,
+      reply: FastifyReply,
+      connectionId: string,
+      requireCsrf: boolean,
+    ): Promise<AuthUser | undefined> {
+      const actor = await authenticate(request, reply)
+      if (!actor || (requireCsrf && !validateCsrf(request, reply))) return undefined
+      if (
+        options.webAccessService
+        && !(await options.webAccessService.can(actor, connectionId, 'account-manage'))
+      ) {
+        sendError(request, reply, 403, 'FORBIDDEN')
+        return undefined
+      }
+      return actor
+    }
+
+    app.get<{ Params: { connectionId: string } }>(
+      '/api/connections/:connectionId/accounts',
+      { schema: { params: connectionAccountParamsSchema } },
+      async (request, reply) => {
+        const actor = await requireNativeAccountAccess(
+          request,
+          reply,
+          request.params.connectionId,
+          false,
+        )
+        if (!actor) return
+        try {
+          return await nativeAccounts.list(actor, request.params.connectionId)
+        } catch (error) {
+          return handleNativeAccountError(request, reply, error)
+        }
+      },
+    )
+
+    app.post<{
+      Params: { connectionId: string }
+      Body: {
+        identity: { username: string; host?: string }
+        password?: string
+        connectionLimit?: number
+        verificationDatabase?: string
+        verificationIntervalMs?: number
+        confirmed: boolean
+      }
+    }>(
+      '/api/connections/:connectionId/accounts',
+      {
+        schema: {
+          params: connectionAccountParamsSchema,
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['identity', 'confirmed'],
+            properties: {
+              identity: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['username'],
+                properties: {
+                  username: { type: 'string', minLength: 1, maxLength: 128 },
+                  host: { type: 'string', minLength: 1, maxLength: 255 },
+                },
+              },
+              password: { type: 'string', minLength: 1, maxLength: 1024 },
+              connectionLimit: { type: 'integer', minimum: -1 },
+              verificationDatabase: { type: 'string', minLength: 1, maxLength: 128 },
+              verificationIntervalMs: { type: 'integer', minimum: 3_600_000, maximum: 604_800_000 },
+              confirmed: { const: true },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await requireNativeAccountAccess(
+          request,
+          reply,
+          request.params.connectionId,
+          true,
+        )
+        if (!actor) return
+        try {
+          const result = await nativeAccounts.create(actor, {
+            connectionId: request.params.connectionId,
+            ...request.body,
+          })
+          return reply.code(201).send(publicCreatedNativeAccount(result))
+        } catch (error) {
+          return handleNativeAccountError(request, reply, error)
+        }
+      },
+    )
+
+    app.post<{
+      Params: { connectionId: string }
+      Body: {
+        identity: { username: string; host?: string }
+        password?: string
+        verificationDatabase?: string
+        verificationIntervalMs?: number
+        confirmed: boolean
+      }
+    }>(
+      '/api/connections/:connectionId/accounts/adopt',
+      {
+        schema: {
+          params: connectionAccountParamsSchema,
+          body: {
+            type: 'object', additionalProperties: false, required: ['identity', 'confirmed'],
+            properties: {
+              identity: {
+                type: 'object', additionalProperties: false, required: ['username'],
+                properties: {
+                  username: { type: 'string', minLength: 1, maxLength: 128 },
+                  host: { type: 'string', minLength: 1, maxLength: 255 },
+                },
+              },
+              password: { type: 'string', minLength: 1, maxLength: 1024 },
+              verificationDatabase: { type: 'string', minLength: 1, maxLength: 128 },
+              verificationIntervalMs: { type: 'integer', minimum: 3_600_000, maximum: 604_800_000 },
+              confirmed: { const: true },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await requireNativeAccountAccess(request, reply, request.params.connectionId, true)
+        if (!actor) return
+        try {
+          const result = await nativeAccounts.adopt(actor, {
+            connectionId: request.params.connectionId,
+            ...request.body,
+          })
+          return reply.code(201).send(publicCreatedNativeAccount(result))
+        } catch (error) {
+          return handleNativeAccountError(request, reply, error)
+        }
+      },
+    )
+
+    app.post<{
+      Params: { connectionId: string; accountId: string }
+      Body: { password?: string }
+    }>(
+      '/api/connections/:connectionId/accounts/:accountId/rotate-password',
+      {
+        schema: {
+          params: managedAccountParamsSchema,
+          body: {
+            type: 'object', additionalProperties: false,
+            properties: { password: { type: 'string', minLength: 1, maxLength: 1024 } },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await requireNativeAccountAccess(request, reply, request.params.connectionId, true)
+        if (!actor) return
+        try {
+          return publicCreatedNativeAccount(await nativeAccounts.rotatePassword(
+            actor,
+            request.params.accountId,
+            request.body.password,
+          ))
+        } catch (error) {
+          return handleNativeAccountError(request, reply, error)
+        }
+      },
+    )
+
+    app.post<{
+      Params: { connectionId: string; accountId: string }
+      Body: Record<string, never>
+    }>(
+      '/api/connections/:connectionId/accounts/:accountId/verify',
+      {
+        schema: {
+          params: managedAccountParamsSchema,
+          body: { type: 'object', additionalProperties: false, maxProperties: 0 },
+        },
+      },
+      async (request, reply) => {
+        const actor = await requireNativeAccountAccess(request, reply, request.params.connectionId, true)
+        if (!actor) return
+        try {
+          await nativeAccounts.verifyNow(actor, request.params.accountId)
+          return reply.code(204).send()
+        } catch (error) {
+          return handleNativeAccountError(request, reply, error)
+        }
+      },
+    )
+
+    app.post<{
+      Params: { connectionId: string; accountId: string }
+      Body: { webPassword: string }
+    }>(
+      '/api/connections/:connectionId/accounts/:accountId/reveal-password',
+      {
+        config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+        schema: {
+          params: managedAccountParamsSchema,
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['webPassword'],
+            properties: { webPassword: { type: 'string', minLength: 1, maxLength: 1024 } },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await requireNativeAccountAccess(
+          request,
+          reply,
+          request.params.connectionId,
+          true,
+        )
+        if (!actor) return
+        if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
+        try {
+          const password = await nativeAccounts.revealPassword(
+            actor,
+            request.params.accountId,
+            request.body.webPassword,
+          )
+          return { password }
+        } catch (error) {
+          return handleNativeAccountError(request, reply, error)
+        }
+      },
+    )
+
+    app.patch<{
+      Params: { connectionId: string; accountId: string }
+      Body: { enabled: boolean; confirmed?: boolean }
+    }>(
+      '/api/connections/:connectionId/accounts/:accountId',
+      {
+        schema: {
+          params: managedAccountParamsSchema,
+          body: {
+            type: 'object', additionalProperties: false, required: ['enabled'],
+            properties: { enabled: { type: 'boolean' }, confirmed: { type: 'boolean' } },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await requireNativeAccountAccess(request, reply, request.params.connectionId, true)
+        if (!actor) return
+        try {
+          await nativeAccounts.setEnabled(
+            actor,
+            request.params.accountId,
+            request.body.enabled,
+            request.body.confirmed === true,
+          )
+          return reply.code(204).send()
+        } catch (error) {
+          return handleNativeAccountError(request, reply, error)
+        }
+      },
+    )
+
+    app.delete<{
+      Params: { connectionId: string; accountId: string }
+      Body: { confirmed: true }
+    }>(
+      '/api/connections/:connectionId/accounts/:accountId',
+      { schema: { params: managedAccountParamsSchema, body: confirmationBodySchema } },
+      async (request, reply) => {
+        const actor = await requireNativeAccountAccess(request, reply, request.params.connectionId, true)
+        if (!actor) return
+        try {
+          await nativeAccounts.delete(actor, request.params.accountId, request.body.confirmed)
+          return reply.code(204).send()
+        } catch (error) {
+          return handleNativeAccountError(request, reply, error)
+        }
+      },
+    )
+
+    app.post<{
+      Params: { connectionId: string; accountId: string }
+      Body: { confirmed: true }
+    }>(
+      '/api/connections/:connectionId/accounts/:accountId/restore',
+      { schema: { params: managedAccountParamsSchema, body: confirmationBodySchema } },
+      async (request, reply) => {
+        const actor = await requireNativeAccountAccess(request, reply, request.params.connectionId, true)
+        if (!actor) return
+        try {
+          await nativeAccounts.restore(actor, request.params.accountId, request.body.confirmed)
+          return reply.code(204).send()
+        } catch (error) {
+          return handleNativeAccountError(request, reply, error)
+        }
       },
     )
   }
