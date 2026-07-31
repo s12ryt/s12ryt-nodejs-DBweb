@@ -43,10 +43,23 @@ import {
 } from './query/sql-query-service.js'
 import type { SshKnownHostService } from './ssh/ssh-known-host-service.js'
 import { TransferChunkError } from './transfers/encrypted-chunk-store.js'
+import { ExactJsonExportError } from './transfers/exact-json-export-service.js'
+import { ExactJsonImportPreviewError } from './transfers/exact-json-import-preview.js'
+import { ExactJsonImportError } from './transfers/exact-json-import-service.js'
+import { ExactJsonPreviewError } from './transfers/exact-json-preview.js'
 import {
   TransferDownloadError,
   type TransferDownloadService,
 } from './transfers/transfer-download-service.js'
+import {
+  FriendlyCsvExportError,
+  type FriendlyCsvExportService,
+} from './transfers/friendly-csv-export-service.js'
+import { FriendlyCsvPreviewError } from './transfers/friendly-csv-preview.js'
+import {
+  TransferHandlerRouterError,
+  type TransferExecutionHandler,
+} from './transfers/transfer-handler-router.js'
 import {
   TransferJobError,
   type TransferJobService,
@@ -55,6 +68,11 @@ import {
   TransferUploadError,
   type TransferUploadService,
 } from './transfers/transfer-upload-service.js'
+import {
+  TransferPreviewError,
+  type TransferPreviewRequest,
+  type TransferPreviewService,
+} from './transfers/transfer-preview-service.js'
 
 interface BuildAppOptions {
   authService: AuthService
@@ -70,6 +88,9 @@ interface BuildAppOptions {
   transferJobService?: TransferJobService
   transferUploadService?: TransferUploadService
   transferDownloadService?: TransferDownloadService
+  transferPreviewService?: TransferPreviewService
+  friendlyCsvExportService?: FriendlyCsvExportService
+  transferExecutionService?: TransferExecutionHandler
   csrfSecret: Buffer
   production: boolean
   staticRoot?: string
@@ -162,6 +183,20 @@ const messages = {
     FILE_CHECKSUM_MISMATCH: 'Transfer file checksum mismatch',
     DOWNLOAD_NOT_READY: 'Transfer output is not ready for download',
     OUTPUT_NOT_FOUND: 'Transfer output was not found',
+    UPLOAD_INCOMPLETE: 'Transfer upload must be completed before preview',
+    INVALID_PREVIEW: 'Transfer preview settings are invalid',
+    PREVIEW_CHANGED: 'Transfer preview is stale and must be regenerated',
+    PREVIEW_EXPIRED: 'Transfer preview has expired',
+    PREVIEW_NOT_FOUND: 'Transfer preview was not found',
+    FORMULA_CONFIRMATION_REQUIRED: 'Raw spreadsheet formula values require confirmation',
+    EXPORT_CANCELLED: 'Transfer export was cancelled',
+    EXPORT_FAILED: 'Transfer export failed',
+    INVALID_EXPORT_JOB: 'Transfer job cannot run this export',
+    INVALID_IMPORT_JOB: 'Transfer job cannot run this import',
+    IMPORT_CANCELLED: 'Transfer import was cancelled',
+    IMPORT_FAILED: 'Transfer import failed',
+    TRANSFER_CONFIRMATION_REQUIRED: 'Transfer operation requires confirmation',
+    UNSUPPORTED_TRANSFER_HANDLER: 'This transfer format and direction are not supported',
   },
   'zh-TW': {
     FORBIDDEN: '權限不足',
@@ -236,6 +271,20 @@ const messages = {
     FILE_CHECKSUM_MISMATCH: '傳輸檔案校驗碼不符',
     DOWNLOAD_NOT_READY: '傳輸輸出尚未可供下載',
     OUTPUT_NOT_FOUND: '找不到傳輸輸出',
+    UPLOAD_INCOMPLETE: '必須先完成傳輸檔案上傳才能預覽',
+    INVALID_PREVIEW: '傳輸預覽設定無效',
+    PREVIEW_CHANGED: '傳輸預覽已失效，請重新產生',
+    PREVIEW_EXPIRED: '傳輸預覽已過期',
+    PREVIEW_NOT_FOUND: '找不到傳輸預覽',
+    FORMULA_CONFIRMATION_REQUIRED: '原始試算表公式值需要二次確認',
+    EXPORT_CANCELLED: '傳輸匯出已取消',
+    EXPORT_FAILED: '傳輸匯出失敗',
+    INVALID_EXPORT_JOB: '此傳輸工作無法執行該匯出',
+    INVALID_IMPORT_JOB: '此傳輸工作無法執行該匯入',
+    IMPORT_CANCELLED: '傳輸匯入已取消',
+    IMPORT_FAILED: '傳輸匯入失敗',
+    TRANSFER_CONFIRMATION_REQUIRED: '傳輸操作需要確認',
+    UNSUPPORTED_TRANSFER_HANDLER: '不支援此傳輸格式與方向',
   },
 } as const
 
@@ -370,6 +419,54 @@ function handleTransferError(
     if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
     if (error.code === 'OUTPUT_NOT_FOUND') return sendError(request, reply, 404, error.code)
     return sendError(request, reply, 409, error.code)
+  }
+  if (error instanceof TransferPreviewError) {
+    return sendError(request, reply, error.code === 'UPLOAD_INCOMPLETE' ? 409 : 422, error.code)
+  }
+  if (error instanceof FriendlyCsvPreviewError) {
+    if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+    if (error.code === 'PREVIEW_NOT_FOUND') return sendError(request, reply, 404, error.code)
+    if (error.code === 'PREVIEW_CHANGED' || error.code === 'PREVIEW_EXPIRED') {
+      return sendError(request, reply, 409, error.code)
+    }
+    if (error.code === 'CONFIRMATION_REQUIRED') {
+      return sendError(request, reply, 409, 'FORMULA_CONFIRMATION_REQUIRED')
+    }
+    return sendError(request, reply, 422, 'INVALID_PREVIEW')
+  }
+  if (error instanceof ExactJsonPreviewError || error instanceof ExactJsonImportPreviewError) {
+    if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+    if (error.code === 'PREVIEW_NOT_FOUND') return sendError(request, reply, 404, error.code)
+    if (error.code === 'PREVIEW_CHANGED' || error.code === 'PREVIEW_EXPIRED') {
+      return sendError(request, reply, 409, error.code)
+    }
+    if (error instanceof ExactJsonImportPreviewError && error.code === 'CONFIRMATION_REQUIRED') {
+      return sendError(request, reply, 409, 'TRANSFER_CONFIRMATION_REQUIRED')
+    }
+    return sendError(request, reply, 422, 'INVALID_PREVIEW')
+  }
+  if (error instanceof FriendlyCsvExportError) {
+    if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+    if (error.code === 'EXPORT_CANCELLED') return sendError(request, reply, 409, error.code)
+    if (error.code === 'INVALID_EXPORT_JOB') return sendError(request, reply, 409, error.code)
+    return sendError(request, reply, 502, 'EXPORT_FAILED')
+  }
+  if (error instanceof ExactJsonExportError) {
+    if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+    if (error.code === 'EXPORT_CANCELLED' || error.code === 'INVALID_EXPORT_JOB') {
+      return sendError(request, reply, 409, error.code)
+    }
+    return sendError(request, reply, 502, 'EXPORT_FAILED')
+  }
+  if (error instanceof ExactJsonImportError) {
+    if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+    if (error.code === 'IMPORT_CANCELLED' || error.code === 'INVALID_IMPORT_JOB') {
+      return sendError(request, reply, 409, error.code)
+    }
+    return sendError(request, reply, 502, 'IMPORT_FAILED')
+  }
+  if (error instanceof TransferHandlerRouterError) {
+    return sendError(request, reply, 422, error.code)
   }
   throw error
 }
@@ -537,7 +634,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         const actor = await authenticate(request, reply)
         if (!actor || !validateCsrf(request, reply)) return
         try {
-          return await jobs.cancel(actor, request.params.jobId)
+          return options.transferExecutionService
+            ? await options.transferExecutionService.cancel(actor, request.params.jobId)
+            : options.friendlyCsvExportService
+              ? await options.friendlyCsvExportService.cancel(actor, request.params.jobId)
+            : await jobs.cancel(actor, request.params.jobId)
         } catch (error) {
           return handleTransferError(request, reply, error)
         }
@@ -645,6 +746,61 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
               .header('content-length', String(download.size))
               .header('content-disposition', `attachment; filename="${download.filename}"`)
               .send(Readable.from(download.stream))
+          } catch (error) {
+            return handleTransferError(request, reply, error)
+          }
+        },
+      )
+    }
+
+    if (options.transferPreviewService) {
+      const previews = options.transferPreviewService
+      app.post<{ Params: { jobId: string }; Body: TransferPreviewRequest }>(
+        '/api/transfers/:jobId/preview',
+        {
+          schema: {
+            params: jobParamsSchema,
+            body: {
+              type: 'object', additionalProperties: false,
+              required: ['mapping', 'strategy', 'target'],
+              properties: {
+                mapping: { type: 'object' },
+                strategy: { type: 'object' },
+                target: { type: 'object' },
+              },
+            },
+          },
+        },
+        async (request, reply) => {
+          const actor = await authenticate(request, reply)
+          if (!actor || !validateCsrf(request, reply)) return
+          try {
+            return await previews.preview(actor, request.params.jobId, request.body)
+          } catch (error) {
+            return handleTransferError(request, reply, error)
+          }
+        },
+      )
+    }
+
+    const transferExecutions = options.transferExecutionService ?? options.friendlyCsvExportService
+    if (transferExecutions) {
+      app.post<{ Params: { jobId: string }; Body: { previewToken: string } }>(
+        '/api/transfers/:jobId/execute',
+        {
+          schema: {
+            params: jobParamsSchema,
+            body: {
+              type: 'object', additionalProperties: false, required: ['previewToken'],
+              properties: { previewToken: { type: 'string', minLength: 1, maxLength: 8192 } },
+            },
+          },
+        },
+        async (request, reply) => {
+          const actor = await authenticate(request, reply)
+          if (!actor || !validateCsrf(request, reply)) return
+          try {
+            return await transferExecutions.execute(actor, request.params.jobId, request.body.previewToken)
           } catch (error) {
             return handleTransferError(request, reply, error)
           }

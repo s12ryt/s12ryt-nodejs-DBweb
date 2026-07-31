@@ -5,6 +5,7 @@ import { join } from 'node:path'
 
 import type { FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
+import { vi } from 'vitest'
 
 import { MemoryWebAccessRepository, WebAccessService } from '../access/web-access-service.js'
 import { buildApp } from '../app.js'
@@ -12,13 +13,17 @@ import { AuthService } from '../auth/auth-service.js'
 import { MemoryAuthRepository } from '../auth/memory-auth-repository.js'
 import { EnvelopeEncryption } from '../security/envelope-encryption.js'
 import { EncryptedChunkStore } from './encrypted-chunk-store.js'
+import { ExactJsonExportError } from './exact-json-export-service.js'
 import { TransferDownloadService } from './transfer-download-service.js'
+import { TransferHandlerRouter } from './transfer-handler-router.js'
 import {
   MemoryTransferJobRepository,
+  type StoredTransferJob,
   TransferJobService,
   transitionTransferJob,
 } from './transfer-job.js'
 import { TransferUploadService } from './transfer-upload-service.js'
+import type { TransferPreviewService } from './transfer-preview-service.js'
 
 function sha256(content: Uint8Array): string {
   return createHash('sha256').update(content).digest('hex')
@@ -88,12 +93,39 @@ describe('transfer HTTP API', () => {
       output,
       async (actor, job) => access.can(actor, job.connectionId, 'data-read'),
     )
+    const preview = vi.fn(async () => ({
+      token: 'v1.preview-token.signature',
+      estimatedBytes: 64,
+      estimatedRows: 2,
+      estimatedTables: 1,
+      issues: [],
+    }))
+    const execute = vi.fn(async () => ({
+      bytes: 64,
+      checksum: sha256(Buffer.from('csv-output')),
+      chunks: [{ index: 0, size: 64, checksum: sha256(Buffer.from('csv-output')) }],
+    }))
+    const cancelExport = vi.fn((actor, jobId: string) => jobs.cancel(actor, jobId))
+    const executionHandler = {
+      inspect: vi.fn(async () => ({
+        fingerprint: {} as never, estimatedBytes: 0, estimatedRows: 0, estimatedTables: 0, issues: [], plan: {},
+      })),
+      execute,
+      cancel: cancelExport,
+    }
+    const transferExecutionService = new TransferHandlerRouter(jobs, {
+      friendlyCsvExport: executionHandler,
+      exactJsonExport: executionHandler,
+      exactJsonImport: executionHandler,
+    })
     const app = await buildApp({
       authService,
       webAccessService: access,
       transferJobService: jobs,
       transferUploadService: uploads,
       transferDownloadService: downloads,
+      transferPreviewService: { preview } as unknown as TransferPreviewService,
+      transferExecutionService,
       csrfSecret: Buffer.alloc(32, 5),
       production: false,
     })
@@ -116,6 +148,8 @@ describe('transfer HTTP API', () => {
       operatorUser,
       jobs,
       output,
+      preview,
+      execute,
     }
   }
 
@@ -261,5 +295,97 @@ describe('transfer HTTP API', () => {
     expect((await environment.app.inject({
       method: 'GET', url: `/api/transfers/${job.id}/download`, headers,
     })).statusCode).toBe(403)
+  })
+
+  it('以伺服器preview計畫執行friendly CSV export', async () => {
+    const environment = await setup()
+    await environment.access.assign(
+      environment.adminUser,
+      environment.operatorUser.id,
+      'connection-1',
+      ['data-read'],
+    )
+    const headers = {
+      cookie: environment.operator.cookie,
+      'x-csrf-token': environment.operator.csrf,
+    }
+    const created = await environment.app.inject({
+      method: 'POST', url: '/api/transfers', headers,
+      payload: { connectionId: 'connection-1', direction: 'export', format: 'csv' },
+    })
+    const jobId = created.json<{ id: string }>().id
+    const request = {
+      mapping: {},
+      strategy: { mode: 'friendly', delimiter: ',', bom: true, rawFormulaValues: false },
+      target: { schema: 'public', table: 'orders', filters: [] },
+    }
+
+    const previewed = await environment.app.inject({
+      method: 'POST', url: `/api/transfers/${jobId}/preview`, headers, payload: request,
+    })
+    expect(previewed.statusCode).toBe(200)
+    expect(previewed.json()).toMatchObject({ token: 'v1.preview-token.signature', estimatedRows: 2 })
+    expect(environment.preview).toHaveBeenCalledWith(
+      expect.objectContaining({ id: environment.operatorUser.id }),
+      jobId,
+      request,
+    )
+
+    const executed = await environment.app.inject({
+      method: 'POST', url: `/api/transfers/${jobId}/execute`, headers,
+      payload: { previewToken: 'v1.preview-token.signature' },
+    })
+    expect(executed.statusCode).toBe(200)
+    expect(executed.json()).toMatchObject({ bytes: 64 })
+    expect(environment.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ id: environment.operatorUser.id }),
+      jobId,
+      'v1.preview-token.signature',
+    )
+  })
+
+  it('拒絕尚未支援的傳輸方向與格式，不fallback至其他handler', async () => {
+    const environment = await setup()
+    const headers = {
+      cookie: environment.operator.cookie,
+      'x-csrf-token': environment.operator.csrf,
+    }
+    await environment.access.assign(environment.adminUser, environment.operatorUser.id, 'connection-1', ['data-write'])
+    const created = await environment.app.inject({
+      method: 'POST', url: '/api/transfers', headers,
+      payload: { connectionId: 'connection-1', direction: 'import', format: 'csv' },
+    })
+    const jobId = created.json<StoredTransferJob>().id
+    const response = await environment.app.inject({
+      method: 'POST', url: `/api/transfers/${jobId}/execute`, headers,
+      payload: { previewToken: 'v1.preview-token.signature' },
+    })
+
+    expect(response.statusCode).toBe(422)
+    expect(response.json()).toMatchObject({ error: { code: 'UNSUPPORTED_TRANSFER_HANDLER' } })
+    expect(environment.execute).not.toHaveBeenCalled()
+  })
+
+  it('不洩露精確JSON匯出的底層失敗', async () => {
+    const environment = await setup()
+    const headers = {
+      cookie: environment.operator.cookie,
+      'x-csrf-token': environment.operator.csrf,
+    }
+    await environment.access.assign(environment.adminUser, environment.operatorUser.id, 'connection-1', ['data-read'])
+    const created = await environment.app.inject({
+      method: 'POST', url: '/api/transfers', headers,
+      payload: { connectionId: 'connection-1', direction: 'export', format: 'json' },
+    })
+    const jobId = created.json<StoredTransferJob>().id
+    environment.execute.mockRejectedValueOnce(new ExactJsonExportError('EXPORT_FAILED'))
+    const response = await environment.app.inject({
+      method: 'POST', url: `/api/transfers/${jobId}/execute`,
+      headers: { ...headers, 'accept-language': 'en' },
+      payload: { previewToken: 'v1.preview-token.signature' },
+    })
+
+    expect(response.statusCode).toBe(502)
+    expect(response.json()).toEqual({ error: { code: 'EXPORT_FAILED', message: 'Transfer export failed' } })
   })
 })
