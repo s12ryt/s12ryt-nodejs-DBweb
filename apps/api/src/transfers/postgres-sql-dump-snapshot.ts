@@ -364,7 +364,9 @@ class PostgresSqlDumpSnapshotSession implements SqlDumpSnapshotSession {
        LEFT JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid
        LEFT JOIN pg_catalog.pg_constraint con ON con.contypid = t.oid AND con.contype = 'c'
        WHERE ${clauses.join(' AND ')}
-       GROUP BY t.oid, n.nspname, t.typname, t.typtype, con.oid
+       GROUP BY t.oid, n.nspname, t.typname, t.typtype,
+                t.typbasetype, t.typtypmod, t.typnotnull, t.typdefaultbin,
+                con.oid, con.conbin
        ORDER BY n.nspname, t.typname`,
       values,
     )
@@ -944,6 +946,7 @@ function parseTriggerArguments(value: unknown): string[] {
 
 function mapFormattedType(formatted: string): DdlColumnType {
   const normalized = formatted.toLowerCase()
+  if (normalized === 'trigger') return { name: 'trigger' }
   const numeric = /^(?:numeric|decimal)\((\d+)(?:,(\d+))?\)$/.exec(normalized)
   if (numeric) {
     return {

@@ -205,11 +205,17 @@ describe('PostgreSQL SQL dump snapshot', () => {
             dbweb_language: 'plpgsql', dbweb_body: 'BEGIN NULL; END', dbweb_volatility: 'v',
             dbweb_security_definer: true, dbweb_strict: false,
           },
+          {
+            dbweb_routine_schema: 'public', dbweb_routine_name: 'touch_order', dbweb_routine_kind: 'f',
+            dbweb_arguments: [], dbweb_return_type: 'trigger', dbweb_returns_set: false,
+            dbweb_language: 'plpgsql', dbweb_body: 'BEGIN RETURN NEW; END', dbweb_volatility: 'v',
+            dbweb_security_definer: false, dbweb_strict: false,
+          },
         ] })
         if (input.includes('dbweb_trigger_name')) return Promise.resolve({ rows: [{
           dbweb_trigger_schema: 'public', dbweb_trigger_table: 'orders', dbweb_trigger_name: 'orders_audit',
           dbweb_trigger_timing: 'after', dbweb_trigger_events: '{insert,update}', dbweb_for_each: 'row',
-          dbweb_when: 'NEW.id IS NOT NULL', dbweb_function_schema: 'public', dbweb_function_name: 'order_total',
+          dbweb_when: 'NEW.id IS NOT NULL', dbweb_function_schema: 'public', dbweb_function_name: 'touch_order',
           dbweb_function_arguments: '{}',
         }] })
         if (input.includes('dbweb_partition_name')) return Promise.resolve({ rows: [{
@@ -240,6 +246,7 @@ describe('PostgreSQL SQL dump snapshot', () => {
       'extension:pgcrypto',
       'function:public.order_total',
       'procedure:public.refresh_orders',
+      'function:public.touch_order',
       'trigger:public.orders.orders_audit',
       'partition:public.orders.orders_2026',
     ])
@@ -282,11 +289,15 @@ describe('PostgreSQL SQL dump snapshot', () => {
         kind: 'create-routine', routineKind: 'procedure', language: 'plpgsql',
         security: 'definer', body: 'BEGIN NULL; END', confirmed: true,
       }))
+    expect(snapshot.manifest.objects.find((object) => object.id === 'function:public.touch_order')?.createCommands[0])
+      .toEqual(expect.objectContaining({
+        kind: 'create-routine', routineKind: 'function', returns: { name: 'trigger' },
+      }))
     expect(snapshot.manifest.objects.find((object) => object.id === 'trigger:public.orders.orders_audit')).toEqual(expect.objectContaining({
-      dependencies: ['schema:public', 'table:public.orders', 'function:public.order_total'],
+      dependencies: ['schema:public', 'table:public.orders', 'function:public.touch_order'],
       createCommands: [expect.objectContaining({
         kind: 'create-trigger', table: 'orders', name: 'orders_audit', timing: 'after',
-        events: ['insert', 'update'], forEach: 'row', functionName: 'order_total', confirmed: true,
+        events: ['insert', 'update'], forEach: 'row', functionName: 'touch_order', confirmed: true,
       })],
     }))
     expect(snapshot.manifest.objects.find((object) => object.id === 'partition:public.orders.orders_2026')).toEqual(expect.objectContaining({
@@ -299,6 +310,12 @@ describe('PostgreSQL SQL dump snapshot', () => {
     expect(queries.find((sql) => sql.includes('dbweb_routine_kind'))).toContain("dep.deptype = 'e'")
     expect(queries.find((sql) => sql.includes('dbweb_routine_kind')))
       .toContain('(COALESCE(p.proallargtypes, p.proargtypes::oid[]))[s.i]')
+    const typeQuery = queries.find((sql) => sql.includes('dbweb_type_kind'))
+    expect(typeQuery).toMatch(/GROUP BY[^]*t\.typbasetype/)
+    expect(typeQuery).toMatch(/GROUP BY[^]*t\.typtypmod/)
+    expect(typeQuery).toMatch(/GROUP BY[^]*t\.typnotnull/)
+    expect(typeQuery).toMatch(/GROUP BY[^]*t\.typdefaultbin/)
+    expect(typeQuery).toMatch(/GROUP BY[^]*con\.conbin/)
     expect(queries.find((sql) => sql.includes('dbweb_table_schema'))).toContain('pg_get_partkeydef')
   })
 })
