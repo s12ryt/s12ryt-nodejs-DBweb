@@ -711,6 +711,57 @@ describe('DBWeb application shell', () => {
       { method: 'POST', url: '/api/connections/connection-1/accounts/native-1/reveal-password', body: { webPassword: 'admin-password-value' } },
     ]))
   })
+
+  it('loads actual grants and confirms native privilege revocation', async () => {
+    const commands: unknown[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input); const method = init?.method ?? 'GET'
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url.endsWith('/accounts') && method === 'GET') return Response.json([managedNativeAccount])
+      if (url.includes('/accounts/grants?')) return Response.json([
+        { scope: 'database', database: 'analytics', privileges: ['connect'] },
+      ])
+      if (url.endsWith('/accounts/grants') && method === 'POST') {
+        commands.push(JSON.parse(String(init?.body)) as unknown)
+        return Response.json({ appliedCount: 1 })
+      }
+      return new Response(null, { status: 204 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText(connection.name))
+    await user.click(screen.getByRole('tab', { name: '原生帳號' }))
+    await user.click(await screen.findByRole('button', { name: '管理權限 reporter' }))
+    const dialog = screen.getByRole('dialog', { name: '管理資料庫權限' })
+    await user.clear(within(dialog).getByLabelText('目標資料庫'))
+    await user.type(within(dialog).getByLabelText('目標資料庫'), 'analytics')
+    await user.click(within(dialog).getByRole('button', { name: '讀取實際權限' }))
+    expect(await within(dialog).findByText('CONNECT')).toBeVisible()
+
+    await user.selectOptions(within(dialog).getByLabelText('權限範圍'), 'table')
+    await user.type(within(dialog).getByLabelText('Schema 名稱'), 'reporting')
+    await user.type(within(dialog).getByLabelText('資料表名稱'), 'orders')
+    await user.click(within(dialog).getByRole('checkbox', { name: 'SELECT' }))
+    await user.click(within(dialog).getByRole('button', { name: '授予權限' }))
+
+    await user.click(within(dialog).getByRole('button', { name: '撤銷權限' }))
+    const confirmation = screen.getByRole('dialog', { name: '確認撤銷權限' })
+    await user.click(within(confirmation).getByRole('button', { name: '撤銷' }))
+
+    expect(commands).toEqual([
+      {
+        kind: 'grant', identity: { engine: 'postgres', username: 'reporter' },
+        changes: [{ scope: 'table', database: 'analytics', schema: 'reporting', table: 'orders', privileges: ['select'] }],
+      },
+      {
+        kind: 'revoke', confirmed: true, identity: { engine: 'postgres', username: 'reporter' },
+        changes: [{ scope: 'table', database: 'analytics', schema: 'reporting', table: 'orders', privileges: ['select'] }],
+      },
+    ])
+  })
 })
 
 const authenticatedSession = {

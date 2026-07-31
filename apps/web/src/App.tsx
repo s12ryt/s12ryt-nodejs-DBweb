@@ -35,7 +35,9 @@ import {
   type DdlCapabilities,
   type Locale,
   type NativeAccount,
+  type NativeGrantChange,
   type NativeAccountResult,
+  type NativePrivilege,
   type QueryResult,
   type RowPage,
   type Session,
@@ -289,6 +291,7 @@ function NativeAccountWorkbench({ connection, locale, csrfToken, isAdmin }: { co
   const [creating, setCreating] = useState(false)
   const [confirming, setConfirming] = useState<NativeConfirmation>()
   const [revealing, setRevealing] = useState<NativeAccount>()
+  const [granting, setGranting] = useState<NativeAccount>()
   const [shownPassword, setShownPassword] = useState('')
 
   const load = useCallback(async () => {
@@ -390,6 +393,7 @@ function NativeAccountWorkbench({ connection, locale, csrfToken, isAdmin }: { co
                 <button className="danger-button" type="button" onClick={() => setConfirming({ kind: 'delete', account })}>{t('deleteNativeAccount')} {label}</button>
               </>}
               {!account.protected && account.managed && deleted && <button type="button" onClick={() => setConfirming({ kind: 'restore', account })}>{t('restoreNativeAccount')} {label}</button>}
+              {!account.protected && !deleted && <button type="button" onClick={() => setGranting(account)}>{t('manageNativeGrants')} {label}</button>}
             </div>
           </article>
         })}
@@ -409,9 +413,119 @@ function NativeAccountWorkbench({ connection, locale, csrfToken, isAdmin }: { co
         <div className="dialog-actions"><button type="button" onClick={() => setCreating(false)}>{t('cancel')}</button><button className="primary-button" type="submit">{t('create')}</button></div>
       </form></Modal>}
       {revealing && <Modal title={t('reauthenticate')} onClose={() => setRevealing(undefined)}><form className="form-grid" onSubmit={(event) => void reveal(event)}><Field label={t('currentPassword')}><input name="webPassword" type="password" required /></Field><div className="dialog-actions"><button type="button" onClick={() => setRevealing(undefined)}>{t('cancel')}</button><button className="primary-button" type="submit">{t('revealNativePassword')}</button></div></form></Modal>}
+      {granting && <NativeGrantDialog account={granting} connection={connection} locale={locale} csrfToken={csrfToken} onClose={() => setGranting(undefined)} />}
       {confirmCopy && <ConfirmDialog title={confirmCopy.title} body={confirmCopy.body} confirm={confirmCopy.confirm} cancel={t('cancel')} onCancel={() => setConfirming(undefined)} onConfirm={() => void runConfirmation()} />}
     </section>
   )
+}
+
+type NativeGrantScope = NativeGrantChange['scope']
+
+const POSTGRES_PRIVILEGES: Record<NativeGrantScope, NativePrivilege[]> = {
+  database: ['connect', 'create'],
+  schema: ['usage', 'create'],
+  table: ['select', 'insert', 'update', 'delete', 'references'],
+}
+const MYSQL_PRIVILEGES: Record<Exclude<NativeGrantScope, 'schema'>, NativePrivilege[]> = {
+  database: ['select', 'insert', 'update', 'delete', 'create', 'alter', 'drop', 'index', 'references'],
+  table: ['select', 'insert', 'update', 'delete', 'create', 'alter', 'drop', 'index', 'references'],
+}
+
+function NativeGrantDialog({ account, connection, locale, csrfToken, onClose }: { account: NativeAccount; connection: ConnectionProfile; locale: Locale; csrfToken: string; onClose: () => void }) {
+  const t = translations(locale)
+  const [targetDatabase, setTargetDatabase] = useState(connection.database)
+  const [scope, setScope] = useState<NativeGrantScope>('table')
+  const [schema, setSchema] = useState('')
+  const [table, setTable] = useState('')
+  const [selected, setSelected] = useState<NativePrivilege[]>([])
+  const [actual, setActual] = useState<NativeGrantChange[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [pendingRevoke, setPendingRevoke] = useState<NativeGrantChange>()
+  const [error, setError] = useState('')
+  const [appliedCount, setAppliedCount] = useState<number>()
+  const base = `/api/connections/${encodeURIComponent(connection.id)}/accounts/grants`
+  const identity = account.identity
+  const privileges = identity.engine === 'postgres' ? POSTGRES_PRIVILEGES[scope] : MYSQL_PRIVILEGES[scope === 'schema' ? 'database' : scope]
+
+  useEffect(() => {
+    if (identity.engine === 'mysql' && scope === 'schema') setScope('database')
+    setSelected([])
+  }, [identity.engine, scope])
+
+  function grantQuery() {
+    const query = new URLSearchParams({ targetDatabase, engine: identity.engine, username: identity.username })
+    if (identity.engine === 'mysql') query.set('host', identity.host)
+    return `${base}?${query.toString()}`
+  }
+
+  async function loadActual() {
+    setError(''); setAppliedCount(undefined)
+    try {
+      setActual(await apiRequest<NativeGrantChange[]>(grantQuery(), { locale }))
+      setLoaded(true)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
+  function currentChange(): NativeGrantChange | undefined {
+    const database = targetDatabase.trim()
+    if (!database || selected.length === 0) return undefined
+    if (scope === 'database') return { scope, database, privileges: selected }
+    if (scope === 'schema') return { scope, database, schema: schema.trim(), privileges: selected }
+    return {
+      scope,
+      database,
+      ...(identity.engine === 'postgres' ? { schema: schema.trim() } : {}),
+      table: table.trim(),
+      privileges: selected,
+    }
+  }
+
+  async function execute(kind: 'grant' | 'revoke', change: NativeGrantChange, confirmed = false) {
+    setError(''); setAppliedCount(undefined)
+    try {
+      const result = await apiRequest<{ appliedCount: number }>(base, {
+        method: 'POST', locale, csrfToken,
+        body: { kind, ...(confirmed ? { confirmed: true } : {}), identity, changes: [change] },
+      })
+      setAppliedCount(result.appliedCount)
+      setPendingRevoke(undefined)
+      await loadActual()
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
+  function togglePrivilege(privilege: NativePrivilege, enabled: boolean) {
+    setSelected((current) => enabled ? [...current, privilege] : current.filter((value) => value !== privilege))
+  }
+
+  return <>
+    <Modal title={t('manageDatabaseGrants')} onClose={onClose}>
+      <div className="grant-manager">
+        <div className="grant-toolbar">
+          <Field label={t('targetDatabase')}><input value={targetDatabase} onChange={(event) => { setTargetDatabase(event.target.value); setLoaded(false) }} required /></Field>
+          <button type="button" onClick={() => void loadActual()}>{t('loadActualGrants')}</button>
+        </div>
+        {error && <div className="inline-error" role="alert">{error}</div>}
+        {appliedCount !== undefined && <div className="result-meta"><span>{t('affected')}</span><strong>{appliedCount}</strong></div>}
+        <section className="actual-grants" aria-label={t('actualGrants')}>
+          <span className="section-label">{t('actualGrants')}</span>
+          {loaded && actual.length === 0 && <p>{t('noActualGrants')}</p>}
+          {actual.map((grant, index) => <div className="actual-grant" key={`${grant.scope}:${index}`}><strong>{grant.scope}</strong><span>{grant.privileges.map((value) => value.toUpperCase()).join(', ')}</span></div>)}
+        </section>
+        <div className="grant-editor">
+          <Field label={t('privilegeScope')}><select value={scope} onChange={(event) => setScope(event.target.value as NativeGrantScope)}><option value="database">database</option>{identity.engine === 'postgres' && <option value="schema">schema</option>}<option value="table">table</option></select></Field>
+          {(scope === 'schema' || (scope === 'table' && identity.engine === 'postgres')) && <Field label={t('ddlSchemaName')}><input value={schema} onChange={(event) => setSchema(event.target.value)} required /></Field>}
+          {scope === 'table' && <Field label={t('ddlTableName')}><input value={table} onChange={(event) => setTable(event.target.value)} required /></Field>}
+          <fieldset className="privilege-grid"><legend>{t('privileges')}</legend>{privileges.map((privilege) => <label className="check-field" key={privilege}><input type="checkbox" checked={selected.includes(privilege)} onChange={(event) => togglePrivilege(privilege, event.target.checked)} />{privilege.toUpperCase()}</label>)}</fieldset>
+        </div>
+        <div className="dialog-actions"><button type="button" onClick={onClose}>{t('cancel')}</button><button type="button" className="danger-button" onClick={() => { const change = currentChange(); if (change) setPendingRevoke(change) }}>{t('revokePrivileges')}</button><button type="button" className="primary-button" onClick={() => { const change = currentChange(); if (change) void execute('grant', change) }}>{t('grantPrivileges')}</button></div>
+      </div>
+    </Modal>
+    {pendingRevoke && <ConfirmDialog title={t('confirmRevokeGrants')} body={t('confirmRevokeGrants')} confirm={t('revoke')} cancel={t('cancel')} onCancel={() => setPendingRevoke(undefined)} onConfirm={() => void execute('revoke', pendingRevoke, true)} />}
+  </>
 }
 
 function nativeConfirmationCopy(kind: NativeConfirmation['kind'], t: ReturnType<typeof translations>) {

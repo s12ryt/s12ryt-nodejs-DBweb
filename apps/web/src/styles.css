@@ -166,6 +166,16 @@ tbody tr:hover { background: #f3faf6; }
 .password-once { display: grid; grid-template-columns: auto minmax(0, 1fr) 30px; gap: 10px; align-items: center; margin-top: 12px; border-left: 3px solid var(--warning); background: #fff8e8; padding: 10px 12px; font-size: 11px; }
 .password-once code { min-width: 0; overflow-wrap: anywhere; font: 700 13px 'IBM Plex Mono', monospace; }
 .password-once button { width: 30px; height: 30px; border: 0; background: transparent; color: var(--muted); }
+.grant-manager { display: grid; gap: 14px; padding: 18px; }
+.grant-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.actual-grants { display: grid; gap: 7px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 12px 0; }
+.actual-grants p { margin: 0; color: var(--muted); font-size: 12px; }
+.actual-grant { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 12px; font: 11px 'IBM Plex Mono', monospace; }
+.actual-grant strong { text-transform: uppercase; }
+.actual-grant span { overflow-wrap: anywhere; color: var(--muted); }
+.grant-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.privilege-grid { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; border: 1px solid var(--line); padding: 12px; }
+.privilege-grid legend { padding: 0 5px; color: var(--muted); font-size: 11px; }
 @media (max-width: 760px) { .user-manager-grid { grid-template-columns: 1fr; } .user-lifecycle { grid-template-columns: 1fr; } }
 .mutation-form { display: grid; gap: 12px; padding: 18px; }
 .mutation-field { display: grid; grid-template-columns: minmax(90px, .7fr) minmax(180px, 2fr) 104px; align-items: end; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
@@ -208,4 +218,6 @@ tbody tr:hover { background: #f3faf6; }
   .native-account-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .password-once { grid-template-columns: minmax(0, 1fr) 30px; }
   .password-once span { grid-column: 1 / -1; }
+  .grant-toolbar, .grant-editor { grid-template-columns: 1fr; }
+  .privilege-grid { grid-column: 1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
