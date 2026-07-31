@@ -270,9 +270,28 @@ async function liveCapabilities(gateway: DdlGateway): Promise<DdlCapabilities> {
 }
 
 async function run(gateway: DdlGateway, capabilities: DdlCapabilities, command: DdlCommand): Promise<void> {
-  await gateway.execute(connection, buildDdlStatements(capabilities, command), {
-    transactional: capabilities.transactionalDdl && !command.kind.endsWith('-database'),
-  })
+  const statements = buildDdlStatements(capabilities, command)
+  try {
+    await gateway.execute(connection, statements, {
+      transactional: capabilities.transactionalDdl && !command.kind.endsWith('-database'),
+    })
+  } catch (error) {
+    if (engine !== 'mysql') throw error
+    try {
+      for (const statement of statements) await mysqlQuery(statement)
+    } catch (diagnosticError) {
+      throw new Error(`MySQL integration DDL diagnostic: ${mysqlDiagnostic(diagnosticError)}`, { cause: diagnosticError })
+    }
+    throw error
+  }
+}
+
+function mysqlDiagnostic(error: unknown): string {
+  if (!(error instanceof Error)) return 'unknown driver error'
+  const details = error as Error & { code?: unknown; sqlState?: unknown }
+  const code = typeof details.code === 'string' ? details.code : 'UNKNOWN'
+  const sqlState = typeof details.sqlState === 'string' ? details.sqlState : 'UNKNOWN'
+  return `${code}/${sqlState}: ${error.message}`
 }
 
 async function postgresQuery(sql: string): Promise<Array<Record<string, unknown>>> {
