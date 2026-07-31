@@ -39,6 +39,127 @@ describe('DBWeb application shell', () => {
     expect(screen.getByRole('heading', { name: 'Connection workbench' })).toBeVisible()
   })
 
+  it('requires a temporary-password user to change their password before entering the workbench', async () => {
+    const requests: Array<{ url: string; body?: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      requests.push({
+        url,
+        ...(init?.body ? { body: JSON.parse(String(init.body)) as unknown } : {}),
+      })
+      if (url === '/api/auth/me') return Response.json(passwordChangeSession)
+      if (url === '/api/auth/change-password') return new Response(null, { status: 204 })
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: '變更密碼' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: '連線工作台' })).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('目前密碼'), 'temporary password 123')
+    await user.type(screen.getByLabelText('新密碼'), 'new operator password 456')
+    await user.click(screen.getByRole('button', { name: '變更密碼' }))
+
+    await waitFor(() => expect(requests).toContainEqual({
+      url: '/api/auth/change-password',
+      body: { currentPassword: 'temporary password 123', newPassword: 'new operator password 456' },
+    }))
+    expect(await screen.findByRole('heading', { name: '登入 DBWeb' })).toBeVisible()
+  })
+
+  it('creates a managed user and shows the generated temporary password once', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([])
+      if (url === '/api/users' && (init?.method ?? 'GET') === 'GET') {
+        return Response.json([authenticatedSession.user])
+      }
+      if (url === '/api/users') return Response.json({
+        user: { id: 'user-2', username: 'reader', role: 'user', enabled: true, passwordChangeRequired: true },
+        temporaryPassword: 'generated-password-1',
+      }, { status: 201 })
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: '使用者與權限' }))
+    await user.click(screen.getByRole('button', { name: '建立使用者' }))
+    await user.type(screen.getByLabelText('使用者名稱'), 'reader')
+    await user.click(screen.getByRole('button', { name: '建立' }))
+
+    expect(await screen.findByText('generated-password-1')).toBeVisible()
+    expect(screen.getByText('此密碼只顯示一次')).toBeVisible()
+  })
+
+  it('manages user state, role, password reset, and confirmed deletion', async () => {
+    const commands: Array<{ method: string; url: string; body?: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input); const method = init?.method ?? 'GET'
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([])
+      if (url === '/api/users' && method === 'GET') return Response.json([authenticatedSession.user, managedReader])
+      if (url.endsWith('/access')) return Response.json([])
+      if (method !== 'GET') commands.push({ method, url, ...(init?.body ? { body: JSON.parse(String(init.body)) as unknown } : {}) })
+      if (method === 'PATCH') return Response.json({ ...managedReader, ...(init?.body ? JSON.parse(String(init.body)) as object : {}) })
+      if (url.endsWith('/reset-password')) return Response.json({ user: { ...managedReader, passwordChangeRequired: true }, temporaryPassword: 'reset-password-value' })
+      if (method === 'DELETE') return new Response(null, { status: 204 })
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: '使用者與權限' }))
+    await user.click(await screen.findByRole('button', { name: 'reader' }))
+    await user.click(screen.getByRole('checkbox', { name: '啟用帳號' }))
+    await user.selectOptions(screen.getByLabelText('角色'), 'admin')
+    await user.click(screen.getByRole('button', { name: '重設密碼' }))
+    expect(await screen.findByText('reset-password-value')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '永久刪除' }))
+    await user.click(within(screen.getByRole('dialog', { name: '確認刪除使用者' })).getByRole('button', { name: '刪除' }))
+
+    await waitFor(() => expect(commands).toEqual(expect.arrayContaining([
+      { method: 'PATCH', url: '/api/users/user-2', body: { enabled: false } },
+      { method: 'PATCH', url: '/api/users/user-2', body: { role: 'admin' } },
+      { method: 'POST', url: '/api/users/user-2/reset-password', body: {} },
+      { method: 'DELETE', url: '/api/users/user-2', body: { confirmed: true } },
+    ])))
+  })
+
+  it('reads, updates, and revokes all six per-connection capabilities', async () => {
+    const commands: Array<{ method: string; url: string; body?: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input); const method = init?.method ?? 'GET'
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url === '/api/users') return Response.json([authenticatedSession.user, managedReader])
+      if (url === '/api/users/user-2/access') return Response.json([{ userId: 'user-2', connectionId: connection.id, capabilities: ['structure-read', 'query-read'] }])
+      if (method === 'PUT' || method === 'DELETE') commands.push({ method, url, ...(init?.body ? { body: JSON.parse(String(init.body)) as unknown } : {}) })
+      if (method === 'PUT') return Response.json({ userId: 'user-2', connectionId: connection.id, capabilities: ['structure-read', 'data-read', 'data-write', 'account-manage'] })
+      if (method === 'DELETE') return new Response(null, { status: 204 })
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: '使用者與權限' }))
+    await user.click(await screen.findByRole('button', { name: 'reader' }))
+    expect(await screen.findByRole('checkbox', { name: '查詢唯讀' })).toBeChecked()
+    await user.click(screen.getByRole('checkbox', { name: '資料寫入' }))
+    await user.click(screen.getByRole('checkbox', { name: '帳號管理' }))
+    await user.click(screen.getByRole('button', { name: '儲存連線權限' }))
+    await user.click(screen.getByRole('button', { name: '撤銷連線權限' }))
+
+    expect(commands).toEqual([
+      {
+        method: 'PUT', url: '/api/users/user-2/connections/connection-1/access',
+        body: { capabilities: ['structure-read', 'query-read', 'data-write', 'account-manage'] },
+      },
+      { method: 'DELETE', url: '/api/users/user-2/connections/connection-1/access' },
+    ])
+  })
+
   it('logs in and loads the connection workbench', async () => {
     const fetchMock = vi
       .fn()
@@ -504,8 +625,18 @@ describe('DBWeb application shell', () => {
 })
 
 const authenticatedSession = {
-  user: { id: 'admin-1', username: 'admin', role: 'admin' as const },
+  user: { id: 'admin-1', username: 'admin', role: 'admin' as const, enabled: true, passwordChangeRequired: false },
   csrfToken: 'csrf-token',
+}
+
+const passwordChangeSession = {
+  user: { id: 'user-1', username: 'operator', role: 'user' as const, enabled: true, passwordChangeRequired: true },
+  csrfToken: 'csrf-token',
+}
+
+const managedReader = {
+  id: 'user-2', username: 'reader', role: 'user' as const, enabled: true,
+  passwordChangeRequired: false,
 }
 
 const connection = {

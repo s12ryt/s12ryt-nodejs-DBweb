@@ -16,11 +16,12 @@ import {
   Square,
   Table2,
   Trash2,
+  Users,
   UserPlus,
   Wrench,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 
 import {
   ApiError,
@@ -36,6 +37,9 @@ import {
   type RowPage,
   type Session,
   type TaggedDatabaseValue,
+  type User,
+  type WebAccessAssignment,
+  type WebCapability,
 } from './api.js'
 import { translations } from './i18n.js'
 
@@ -57,6 +61,9 @@ export function App() {
   if (!session) {
     return <Login locale={locale} onLocale={setLocale} onLogin={setSession} />
   }
+  if (session.user.passwordChangeRequired) {
+    return <PasswordChange locale={locale} session={session} onChanged={() => setSession(null)} />
+  }
   return (
     <Workbench
       locale={locale}
@@ -65,6 +72,23 @@ export function App() {
       onLogout={() => setSession(null)}
     />
   )
+}
+
+function PasswordChange({ locale, session, onChanged }: { locale: Locale; session: Session; onChanged: () => void }) {
+  const t = translations(locale)
+  const [error, setError] = useState('')
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const fields = new FormData(event.currentTarget)
+    try {
+      await apiRequest<void>('/api/auth/change-password', {
+        method: 'POST', locale, csrfToken: session.csrfToken,
+        body: { currentPassword: fields.get('currentPassword'), newPassword: fields.get('newPassword') },
+      })
+      onChanged()
+    } catch (cause) { setError(errorMessage(cause)) }
+  }
+  return <main className="login-layout"><section className="login-brand" aria-label="DBWeb"><div className="wordmark"><Database size={28} aria-hidden="true" /> DBWeb</div><p>SECURITY UPDATE</p></section><section className="login-panel"><form className="login-form" onSubmit={(event) => void submit(event)}><header><span className="eyebrow">PASSWORD REQUIRED</span><h1>{t('changePassword')}</h1><p>{t('changePasswordBody')}</p></header><Field label={t('currentPassword')}><input name="currentPassword" type="password" autoComplete="current-password" required autoFocus /></Field><Field label={t('newPassword')}><input name="newPassword" type="password" autoComplete="new-password" minLength={12} required /></Field>{error && <div className="inline-error" role="alert">{error}</div>}<button className="primary-button wide" type="submit">{t('changePassword')}</button></form></section></main>
 }
 
 function LoadingScreen() {
@@ -144,7 +168,7 @@ function Workbench({ locale, onLocale, session, onLogout }: {
   const [connections, setConnections] = useState<ConnectionProfile[]>([])
   const [selectedId, setSelectedId] = useState<string>()
   const [error, setError] = useState('')
-  const [dialog, setDialog] = useState<'connection' | 'user'>()
+  const [dialog, setDialog] = useState<'connection' | 'users'>()
 
   const loadConnections = useCallback(async () => {
     try {
@@ -193,7 +217,7 @@ function Workbench({ locale, onLocale, session, onLogout }: {
           {connections.length === 0 && <p className="empty-note">{t('connectionEmpty')}</p>}
         </nav>
         {session.user.role === 'admin' && (
-          <button className="rail-command" type="button" onClick={() => setDialog('user')}><UserPlus size={17} />{t('createUser')}</button>
+          <button className="rail-command" type="button" onClick={() => setDialog('users')}><Users size={17} />{t('userAccess')}</button>
         )}
       </aside>
       <section className="workspace">
@@ -201,7 +225,7 @@ function Workbench({ locale, onLocale, session, onLogout }: {
         {!selected ? <EmptyWorkspace title={t('connectionWorkbench')} text={t('selectConnection')} /> : <ConnectionWorkspace key={selected.id} connection={selected} locale={locale} csrfToken={session.csrfToken} isAdmin={session.user.role === 'admin'} />}
       </section>
       {dialog === 'connection' && <ConnectionDialog locale={locale} csrfToken={session.csrfToken} onClose={() => setDialog(undefined)} onCreated={() => { setDialog(undefined); void loadConnections() }} />}
-      {dialog === 'user' && <UserDialog locale={locale} csrfToken={session.csrfToken} onClose={() => setDialog(undefined)} />}
+      {dialog === 'users' && <UserManagementDialog locale={locale} csrfToken={session.csrfToken} connections={connections} onClose={() => setDialog(undefined)} />}
     </main>
   )
 }
@@ -656,10 +680,99 @@ function ConnectionDialog({ locale, csrfToken, onClose, onCreated }: { locale: L
   return <Modal title={t('addConnection')} onClose={onClose}><form className="form-grid" onSubmit={(event) => void submit(event)}><Field label={t('name')}><input name="name" required autoFocus /></Field><Field label={t('engine')}><select name="engine" defaultValue="postgres"><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option></select></Field><Field label={t('host')}><input name="host" defaultValue="localhost" required /></Field><Field label={t('port')}><input name="port" type="number" min="1" max="65535" defaultValue="5432" required /></Field><Field label={t('database')}><input name="database" required /></Field><Field label={t('username')}><input name="username" required /></Field><Field label={t('password')}><input name="password" type="password" /></Field><Field label={t('tlsMode')}><select name="tlsMode" defaultValue="disable"><option value="disable">Disable</option><option value="prefer">Prefer</option><option value="require">Require</option><option value="verify-ca">Verify CA</option><option value="verify-full">Verify full</option></select></Field><label className="check-field"><input name="keepAlive" type="checkbox" />{t('keepAlive')}</label><label className="check-field"><input name="sshEnabled" type="checkbox" checked={sshEnabled} onChange={(event) => setSshEnabled(event.target.checked)} />{t('sshTunnel')}</label>{sshEnabled && <><Field label={t('sshHost')}><input name="sshHost" required /></Field><Field label={t('sshPort')}><input name="sshPort" type="number" min="1" max="65535" defaultValue="22" required /></Field><Field label={t('sshUsername')}><input name="sshUsername" required /></Field><Field label={t('sshPassword')}><input name="sshPassword" type="password" required /></Field></>}{error && <div className="inline-error full" role="alert">{error}</div>}<div className="dialog-actions full"><button className="secondary-button" type="button" onClick={onClose}>{t('cancel')}</button><button className="primary-button" type="submit"><CirclePlus size={16} />{t('save')}</button></div></form></Modal>
 }
 
-function UserDialog({ locale, csrfToken, onClose }: { locale: Locale; csrfToken: string; onClose: () => void }) {
-  const t = translations(locale); const [error, setError] = useState('')
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const data = new FormData(event.currentTarget); try { await apiRequest('/api/users', { method: 'POST', locale, csrfToken, body: { username: data.get('username'), password: data.get('password'), role: data.get('role') } }); onClose() } catch (cause) { setError(errorMessage(cause)) } }
-  return <Modal title={t('createUser')} onClose={onClose}><form className="stack-form" onSubmit={(event) => void submit(event)}><Field label={t('username')}><input name="username" required autoFocus /></Field><Field label={t('password')}><input name="password" type="password" minLength={12} required /></Field><Field label={t('role')}><select name="role" defaultValue="user"><option value="user">{t('userRole')}</option><option value="admin">{t('adminRole')}</option></select></Field>{error && <div className="inline-error" role="alert">{error}</div>}<div className="dialog-actions"><button className="secondary-button" type="button" onClick={onClose}>{t('cancel')}</button><button className="primary-button" type="submit"><UserPlus size={16} />{t('create')}</button></div></form></Modal>
+const WEB_CAPABILITIES: Array<{ value: WebCapability; label: 'structureRead' | 'dataRead' | 'queryRead' | 'dataWrite' | 'ddlWrite' | 'accountManage' }> = [
+  { value: 'structure-read', label: 'structureRead' },
+  { value: 'data-read', label: 'dataRead' },
+  { value: 'query-read', label: 'queryRead' },
+  { value: 'data-write', label: 'dataWrite' },
+  { value: 'ddl-write', label: 'ddlWrite' },
+  { value: 'account-manage', label: 'accountManage' },
+]
+
+function UserManagementDialog({ locale, csrfToken, connections, onClose }: { locale: Locale; csrfToken: string; connections: ConnectionProfile[]; onClose: () => void }) {
+  const t = translations(locale)
+  const [users, setUsers] = useState<User[]>([])
+  const [creating, setCreating] = useState(false)
+  const [selected, setSelected] = useState<User>()
+  const [assignments, setAssignments] = useState<WebAccessAssignment[]>([])
+  const [temporaryPassword, setTemporaryPassword] = useState('')
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [error, setError] = useState('')
+  const load = useCallback(async () => {
+    try { setUsers(await apiRequest<User[]>('/api/users', { locale })) } catch (cause) { setError(errorMessage(cause)) }
+  }, [locale])
+  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    if (!selected) { setAssignments([]); return }
+    let active = true
+    void apiRequest<WebAccessAssignment[]>(`/api/users/${selected.id}/access`, { locale })
+      .then((value) => { if (active) setAssignments(value) })
+      .catch((cause: unknown) => { if (active) setError(errorMessage(cause)) })
+    return () => { active = false }
+  }, [locale, selected?.id])
+
+  function updateUser(next: User) {
+    setSelected(next)
+    setUsers((current) => current.map((user) => user.id === next.id ? next : user))
+  }
+  async function patchUser(body: { enabled: boolean } | { role: 'admin' | 'user' }) {
+    if (!selected) return
+    try {
+      updateUser(await apiRequest<User>(`/api/users/${selected.id}`, { method: 'PATCH', locale, csrfToken, body }))
+    } catch (cause) { setError(errorMessage(cause)) }
+  }
+  async function resetPassword() {
+    if (!selected) return
+    try {
+      const result = await apiRequest<{ user: User; temporaryPassword: string }>(`/api/users/${selected.id}/reset-password`, { method: 'POST', locale, csrfToken, body: {} })
+      updateUser(result.user); setTemporaryPassword(result.temporaryPassword)
+    } catch (cause) { setError(errorMessage(cause)) }
+  }
+  async function deleteUser() {
+    if (!selected) return
+    try {
+      await apiRequest<void>(`/api/users/${selected.id}`, { method: 'DELETE', locale, csrfToken, body: { confirmed: true } })
+      setUsers((current) => current.filter((user) => user.id !== selected.id))
+      setSelected(undefined); setConfirmingDelete(false); setTemporaryPassword('')
+    } catch (cause) { setError(errorMessage(cause)); setConfirmingDelete(false) }
+  }
+  function capabilitiesFor(connectionId: string): WebCapability[] {
+    return assignments.find((assignment) => assignment.connectionId === connectionId)?.capabilities ?? []
+  }
+  function setCapability(connectionId: string, capability: WebCapability, checked: boolean) {
+    const current = capabilitiesFor(connectionId)
+    const capabilities = checked ? [...current, capability] : current.filter((value) => value !== capability)
+    const next = { userId: selected?.id ?? '', connectionId, capabilities }
+    setAssignments((values) => [...values.filter((value) => value.connectionId !== connectionId), next])
+  }
+  async function saveAccess(connectionId: string) {
+    if (!selected) return
+    try {
+      const next = await apiRequest<WebAccessAssignment>(`/api/users/${selected.id}/connections/${connectionId}/access`, { method: 'PUT', locale, csrfToken, body: { capabilities: capabilitiesFor(connectionId) } })
+      setAssignments((values) => [...values.filter((value) => value.connectionId !== connectionId), next])
+    } catch (cause) { setError(errorMessage(cause)) }
+  }
+  async function revokeAccess(connectionId: string) {
+    if (!selected) return
+    try {
+      await apiRequest<void>(`/api/users/${selected.id}/connections/${connectionId}/access`, { method: 'DELETE', locale, csrfToken })
+      setAssignments((values) => values.filter((value) => value.connectionId !== connectionId))
+    } catch (cause) { setError(errorMessage(cause)) }
+  }
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const data = new FormData(event.currentTarget)
+    try {
+      const result = await apiRequest<{ user: User; temporaryPassword: string }>('/api/users', {
+        method: 'POST', locale, csrfToken,
+        body: { username: data.get('username'), role: data.get('role'), ...(data.get('password') ? { password: data.get('password') } : {}) },
+      })
+      setTemporaryPassword(result.temporaryPassword)
+      setCreating(false)
+      await load()
+    } catch (cause) { setError(errorMessage(cause)) }
+  }
+  return <><Modal title={t('userAccess')} onClose={onClose}><div className="user-manager"><div className="user-manager-toolbar"><span>{users.length} {t('users')}</span><button className="primary-button" type="button" onClick={() => { setCreating(true); setTemporaryPassword('') }}><UserPlus size={16} />{t('createUser')}</button></div>{temporaryPassword && <div className="temporary-secret" role="status"><span>{t('passwordShownOnce')}</span><code>{temporaryPassword}</code></div>}<div className="user-manager-grid"><div className="user-list">{users.map((user) => <button aria-label={user.username} className={selected?.id === user.id ? 'user-row active' : 'user-row'} key={user.id} type="button" onClick={() => { setSelected(user); setTemporaryPassword('') }}><strong>{user.username}</strong><span>{user.role === 'admin' ? t('adminRole') : t('userRole')}</span><span>{user.enabled ? t('enabled') : t('disabled')}</span></button>)}</div>{selected && <section className="user-detail"><div className="user-lifecycle"><label className="check-field"><input type="checkbox" aria-label={t('accountEnabled')} checked={selected.enabled} onChange={(event) => void patchUser({ enabled: event.target.checked })} />{t('accountEnabled')}</label><Field label={t('role')}><select value={selected.role} onChange={(event) => void patchUser({ role: event.target.value as 'admin' | 'user' })}><option value="user">{t('userRole')}</option><option value="admin">{t('adminRole')}</option></select></Field><button className="secondary-button" type="button" onClick={() => void resetPassword()}>{t('resetPassword')}</button><button className="danger-button" type="button" onClick={() => setConfirmingDelete(true)}>{t('deletePermanently')}</button></div><div className="access-list">{connections.map((connection) => <section className="access-row" key={connection.id}><header><strong>{connection.name}</strong><small>{connection.engine}</small></header><div className="capability-grid">{WEB_CAPABILITIES.map((capability) => <label className="check-field" key={capability.value}><input type="checkbox" checked={capabilitiesFor(connection.id).includes(capability.value)} onChange={(event) => setCapability(connection.id, capability.value, event.target.checked)} />{t(capability.label)}</label>)}</div><div className="access-actions"><button className="secondary-button" type="button" onClick={() => void saveAccess(connection.id)}>{t('saveAccess')}</button><button className="danger-button" type="button" onClick={() => void revokeAccess(connection.id)}>{t('revokeAccess')}</button></div></section>)}</div></section>}</div>{error && <div className="inline-error" role="alert">{error}</div>}</div>{creating && <Modal title={t('createUser')} onClose={() => setCreating(false)}><form className="stack-form" onSubmit={(event) => void submit(event)}><Field label={t('username')}><input name="username" required autoFocus /></Field><Field label={t('password')}><input name="password" type="password" minLength={12} placeholder={t('generatePassword')} /></Field><Field label={t('role')}><select name="role" defaultValue="user"><option value="user">{t('userRole')}</option><option value="admin">{t('adminRole')}</option></select></Field><div className="dialog-actions"><button className="secondary-button" type="button" onClick={() => setCreating(false)}>{t('cancel')}</button><button className="primary-button" type="submit"><UserPlus size={16} />{t('create')}</button></div></form></Modal>}</Modal>{confirmingDelete && <ConfirmDialog title={t('deleteUserTitle')} body={t('deleteUserBody')} confirm={t('delete')} cancel={t('cancel')} onCancel={() => setConfirmingDelete(false)} onConfirm={() => void deleteUser()} />}</>
 }
 
 interface DataTableMutation {
@@ -735,7 +848,7 @@ function ColumnTable({ columns }: { columns: DatabaseColumn[] }) {
 
 function Field({ label, compact = false, children }: { label: string; compact?: boolean; children: ReactNode }) { return <label className={compact ? 'field compact-field' : 'field'}><span>{label}</span>{children}</label> }
 function IconButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: ReactNode }) { return <button className="icon-button" type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick}>{children}</button> }
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) { return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><header><h2 id="modal-title">{title}</h2><IconButton label="Close" onClick={onClose}><X size={18} /></IconButton></header>{children}</section></div> }
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) { const titleId = useId(); return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId}><header><h2 id={titleId}>{title}</h2><IconButton label="Close" onClick={onClose}><X size={18} /></IconButton></header>{children}</section></div> }
 function ConfirmDialog({ title, body, confirm, cancel, onConfirm, onCancel }: { title: string; body: string; confirm: string; cancel: string; onConfirm: () => void; onCancel: () => void }) { return <Modal title={title} onClose={onCancel}><div className="confirm-body"><AlertTriangle size={30} /><p>{body}</p></div><div className="dialog-actions"><button className="secondary-button" type="button" onClick={onCancel}>{cancel}</button><button className="danger-button" type="button" onClick={onConfirm}>{confirm}</button></div></Modal> }
 function formatCell(value: unknown): string { if (value === null || value === undefined) return 'NULL'; if (typeof value === 'object') return JSON.stringify(value); return String(value) }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : 'Request failed' }

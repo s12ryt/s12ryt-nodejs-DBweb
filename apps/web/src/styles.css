@@ -134,6 +134,24 @@ tbody tr:hover { background: #f3faf6; }
 .modal h2 { margin: 0; font-size: 17px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; padding: 18px; }
 .stack-form { display: grid; gap: 15px; padding: 18px; }
+.user-manager { display: grid; gap: 14px; padding: 18px; }
+.user-manager-toolbar { display: flex; min-height: 38px; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font: 12px 'IBM Plex Mono', monospace; }
+.user-manager-grid { display: grid; grid-template-columns: minmax(210px, .7fr) minmax(320px, 1.3fr); gap: 14px; }
+.user-list { display: grid; align-content: start; border: 1px solid var(--line); }
+.user-row { display: grid; grid-template-columns: minmax(0, 1fr) 90px 60px; gap: 10px; align-items: center; min-height: 42px; border: 0; border-bottom: 1px solid var(--line); background: transparent; padding: 0 10px; color: var(--ink); text-align: left; font-size: 12px; }
+.user-row:last-child { border-bottom: 0; }
+.user-row:hover, .user-row.active { background: #edf3ef; }
+.user-detail { display: grid; gap: 14px; min-width: 0; }
+.user-lifecycle { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
+.access-list { display: grid; gap: 10px; }
+.access-row { border: 1px solid var(--line); padding: 12px; }
+.access-row > header { display: flex; justify-content: space-between; margin-bottom: 10px; }
+.access-row small { color: var(--muted); font: 10px 'IBM Plex Mono', monospace; text-transform: uppercase; }
+.capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.access-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.temporary-secret { display: grid; gap: 6px; border-left: 3px solid var(--warning); background: #fff8e8; padding: 12px; font-size: 12px; }
+.temporary-secret code { overflow-wrap: anywhere; font: 700 14px 'IBM Plex Mono', monospace; }
+@media (max-width: 760px) { .user-manager-grid { grid-template-columns: 1fr; } .user-lifecycle { grid-template-columns: 1fr; } }
 .mutation-form { display: grid; gap: 12px; padding: 18px; }
 .mutation-field { display: grid; grid-template-columns: minmax(90px, .7fr) minmax(180px, 2fr) 104px; align-items: end; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .mutation-field > .field { grid-column: 2; }
