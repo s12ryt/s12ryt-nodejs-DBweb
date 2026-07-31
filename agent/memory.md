@@ -81,3 +81,6 @@
 - 完成server-side transfer handler router與runtime組裝，preview、execute、cancel只依metadata job方向/格式分派；unsupported execute回安全422且不fallback，unsupported queued job仍能取消釋放配額。
 - 本切片完整本機回歸：Vitest 95 files通過、3 integration files略過，377 tests通過、10 cases略過；ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases依設定略過。精確CSV executor及四版本roundtrip仍在M5B待辦。
 - friendly CSV 與精確 JSON 切片以18筆English plain原子提交推送main；GitHub Actions run `30637137877` 的quality、Docker、三瀏覽器與PG9.6/17、MySQL5.6/8.4既有integration jobs全部通過。該run尚未執行transfer roundtrip，不能取代後續CSV/JSON四版本驗收。
+- 完成精確CSV package、export/import services、server-derived preview及CSV composite handler；exact import重用同一PG/MySQL方言gateway，因此atomic/batch、skip/update/replace、partial progress與identity規則不分叉。
+- 新增exact CSV/JSON真實roundtrip integration，從PG/MySQL一致性快照串流到用途隔離的加密staging/output，解析gzip tar後以正式方言gateway匯入並查回資料；workflow已納入PG9.6/17與MySQL5.6/8.4，待遠端驗證。
+- 本切片本機驗證為99個Vitest檔通過、4個integration檔略過，389 tests通過、12 cases略過；ESLint、workspace strict typecheck、production build及Playwright 7 passed/2 responsive skipped全綠。
