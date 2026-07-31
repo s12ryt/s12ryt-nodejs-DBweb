@@ -5,6 +5,15 @@ import type { UserRole } from '../auth/auth-types.js'
 import type { EnvelopeEncryption } from './envelope-encryption.js'
 
 export type SecurityAuditAction =
+  | 'native-account-adopt'
+  | 'native-account-create'
+  | 'native-account-delete'
+  | 'native-account-disable'
+  | 'native-account-enable'
+  | 'native-account-password-reveal'
+  | 'native-account-password-rotate'
+  | 'native-account-restore'
+  | 'native-account-verification'
   | 'password-change'
   | 'password-reset'
   | 'web-access-assign'
@@ -19,6 +28,9 @@ export interface SecurityAuditDetails {
   capabilities?: WebCapability[]
   enabled?: boolean
   role?: UserRole
+  nativeAccountId?: string
+  nativeIdentity?: string
+  verificationStatus?: 'success' | 'retry-scheduled' | 'credential-stale'
 }
 
 export interface SecurityAuditEvent {
