@@ -8,12 +8,14 @@ import {
   Database,
   KeyRound,
   LogOut,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
   Server,
   Square,
   Table2,
+  Trash2,
   UserPlus,
   X,
 } from 'lucide-react'
@@ -25,10 +27,13 @@ import {
   type ConnectionProfile,
   type DatabaseColumn,
   type DatabaseTable,
+  type DataMutationInspection,
+  type DatabaseValueType,
   type Locale,
   type QueryResult,
   type RowPage,
   type Session,
+  type TaggedDatabaseValue,
 } from './api.js'
 import { translations } from './i18n.js'
 
@@ -231,13 +236,13 @@ function ConnectionWorkspace({ connection, locale, csrfToken, isAdmin }: { conne
         <button role="tab" aria-selected={tab === 'browse'} onClick={() => setTab('browse')}><Table2 size={17} />{t('rows')}</button>
         <button role="tab" aria-selected={tab === 'query'} onClick={() => setTab('query')}><Braces size={17} />{t('query')}</button>
       </div>
-      {tab === 'browse' ? <DataBrowser connectionId={connection.id} locale={locale} /> : <QueryEditor connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
+      {tab === 'browse' ? <DataBrowser connectionId={connection.id} locale={locale} csrfToken={csrfToken} isAdmin={isAdmin} /> : <QueryEditor connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
       {confirmingReset && <ConfirmDialog title={t('sshReset')} body={t('sshResetBody')} confirm={t('sshResetConfirm')} cancel={t('cancel')} onCancel={() => setConfirmingReset(false)} onConfirm={() => void resetSshHostKey()} />}
     </div>
   )
 }
 
-function DataBrowser({ connectionId, locale }: { connectionId: string; locale: Locale }) {
+function DataBrowser({ connectionId, locale, csrfToken, isAdmin }: { connectionId: string; locale: Locale; csrfToken: string; isAdmin: boolean }) {
   const t = translations(locale)
   const [schemas, setSchemas] = useState<string[]>([])
   const [schema, setSchema] = useState('')
@@ -248,6 +253,12 @@ function DataBrowser({ connectionId, locale }: { connectionId: string; locale: L
   const [offset, setOffset] = useState(0)
   const [view, setView] = useState<'rows' | 'columns'>('rows')
   const [error, setError] = useState('')
+  const [inspection, setInspection] = useState<DataMutationInspection>()
+  const [refresh, setRefresh] = useState(0)
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set())
+  const [editingRow, setEditingRow] = useState<Record<string, unknown>>()
+  const [deletingRow, setDeletingRow] = useState<Record<string, unknown>>()
+  const [mutationMode, setMutationMode] = useState<'insert' | 'batch'>()
 
   useEffect(() => {
     setError('')
@@ -265,7 +276,7 @@ function DataBrowser({ connectionId, locale }: { connectionId: string; locale: L
   }, [connectionId, locale, schema])
 
   useEffect(() => {
-    setOffset(0); setPage(undefined); setColumns([])
+    setOffset(0); setPage(undefined); setColumns([]); setInspection(undefined); setSelectedRows(new Set())
   }, [table])
 
   useEffect(() => {
@@ -276,7 +287,27 @@ function DataBrowser({ connectionId, locale }: { connectionId: string; locale: L
       apiRequest<RowPage>(`${base}/rows?limit=100&offset=${offset}`, { locale }),
     ]).then(([nextColumns, nextPage]) => { setColumns(nextColumns); setPage(nextPage) })
       .catch((cause) => setError(errorMessage(cause)))
-  }, [connectionId, locale, offset, schema, table])
+    if (isAdmin) {
+      void apiRequest<DataMutationInspection>(`${base}/mutations`, { locale })
+        .then(setInspection)
+        .catch(() => setInspection(undefined))
+    }
+  }, [connectionId, isAdmin, locale, offset, refresh, schema, table])
+
+  const mutationBase = schema && table ? `/api/connections/${encodeURIComponent(connectionId)}/schemas/${encodeURIComponent(schema)}/tables/${encodeURIComponent(table)}/mutations` : ''
+  async function mutate(operations: unknown[]) {
+    try {
+      await apiRequest(mutationBase, { method: 'POST', locale, csrfToken, body: { operations } })
+      setMutationMode(undefined); setEditingRow(undefined); setDeletingRow(undefined); setSelectedRows(new Set()); setRefresh((value) => value + 1)
+    } catch (cause) { setError(errorMessage(cause)) }
+  }
+  function rowReference(row: Record<string, unknown>) {
+    if (!inspection?.policy.identity) throw new Error('TABLE_WITHOUT_STABLE_KEY')
+    const original = encodeRow(row, inspection)
+    return { identity: Object.fromEntries(inspection.policy.identity.columns.map((name) => [name, original[name]])), original }
+  }
+  const selected = [...selectedRows].map((index) => page?.rows[index]).filter((row): row is Record<string, unknown> => row !== undefined)
+  const rowLabel = (row: Record<string, unknown>) => inspection?.policy.identity?.columns.map((name) => formatCell(row[name])).join('/') ?? ''
 
   return (
     <div className="browser-layout">
@@ -291,10 +322,14 @@ function DataBrowser({ connectionId, locale }: { connectionId: string; locale: L
         {error && <div className="inline-error" role="alert">{error}</div>}
         <div className="surface-toolbar">
           <div className="segmented"><button type="button" className={view === 'rows' ? 'active' : ''} onClick={() => setView('rows')}><Table2 size={15} />{t('rows')}</button><button type="button" className={view === 'columns' ? 'active' : ''} onClick={() => setView('columns')}><Columns3 size={15} />{t('columns')}</button></div>
-          {view === 'rows' && <div className="pager"><IconButton label={t('previousPage')} disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 100))}><ChevronLeft size={17} /></IconButton><span>{offset + 1}–{offset + (page?.rows.length ?? 0)}</span><IconButton label={t('nextPage')} disabled={page?.nextOffset === null || !page} onClick={() => setOffset(page?.nextOffset ?? offset)}><ChevronRight size={17} /></IconButton></div>}
+          {view === 'rows' && <div className="row-toolbar">{inspection && <><button className="secondary-button compact-command" type="button" onClick={() => setMutationMode('insert')}><Plus size={15} />{t('createRow')}</button>{selected.length > 0 && inspection.policy.canUpdate && <button className="secondary-button compact-command" type="button" onClick={() => setMutationMode('batch')}>{t('batchEdit')} {selected.length} {t('rowUnit')}</button>}</>}<div className="pager"><IconButton label={t('previousPage')} disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 100))}><ChevronLeft size={17} /></IconButton><span>{offset + 1}–{offset + (page?.rows.length ?? 0)}</span><IconButton label={t('nextPage')} disabled={page?.nextOffset === null || !page} onClick={() => setOffset(page?.nextOffset ?? offset)}><ChevronRight size={17} /></IconButton></div></div>}
         </div>
-        {view === 'rows' ? <DataTable columns={page?.columns ?? []} rows={page?.rows ?? []} empty={t('noRows')} /> : <ColumnTable columns={columns} />}
+        {view === 'rows' ? <DataTable columns={page?.columns ?? []} rows={page?.rows ?? []} empty={t('noRows')} {...(inspection?.policy.identity ? { mutation: { selectedRows, setSelectedRows, canUpdate: inspection.policy.canUpdate, canDelete: inspection.policy.canDelete, rowLabel, edit: setEditingRow, remove: setDeletingRow, t } } : {})} /> : <ColumnTable columns={columns} />}
       </section>
+      {inspection && mutationMode === 'insert' && <MutationDialog title={t('createRow')} inspection={inspection} mode="insert" locale={locale} onClose={() => setMutationMode(undefined)} onSubmit={(values) => void mutate([{ kind: 'insert', values }])} />}
+      {inspection && editingRow && <MutationDialog title={t('editRow')} inspection={inspection} mode="patch" locale={locale} initial={editingRow} onClose={() => setEditingRow(undefined)} onSubmit={(patch) => void mutate([{ kind: 'update', ...rowReference(editingRow), patch }])} />}
+      {inspection && mutationMode === 'batch' && <MutationDialog title={t('batchEdit')} inspection={inspection} mode="patch" locale={locale} onClose={() => setMutationMode(undefined)} onSubmit={(patch) => void mutate([{ kind: 'batch-update', rows: selected.map(rowReference), patch }])} />}
+      {deletingRow && <ConfirmDialog title={t('deleteRow')} body={t('deleteRowBody')} confirm={t('delete')} cancel={t('cancel')} onCancel={() => setDeletingRow(undefined)} onConfirm={() => void mutate([{ kind: 'delete', ...rowReference(deletingRow), confirmed: true }])} />}
     </div>
   )
 }
@@ -364,9 +399,71 @@ function UserDialog({ locale, csrfToken, onClose }: { locale: Locale; csrfToken:
   return <Modal title={t('createUser')} onClose={onClose}><form className="stack-form" onSubmit={(event) => void submit(event)}><Field label={t('username')}><input name="username" required autoFocus /></Field><Field label={t('password')}><input name="password" type="password" minLength={12} required /></Field><Field label={t('role')}><select name="role" defaultValue="user"><option value="user">{t('userRole')}</option><option value="admin">{t('adminRole')}</option></select></Field>{error && <div className="inline-error" role="alert">{error}</div>}<div className="dialog-actions"><button className="secondary-button" type="button" onClick={onClose}>{t('cancel')}</button><button className="primary-button" type="submit"><UserPlus size={16} />{t('create')}</button></div></form></Modal>
 }
 
-function DataTable({ columns, rows, empty }: { columns: string[]; rows: Array<Record<string, unknown>>; empty: string }) {
+interface DataTableMutation {
+  selectedRows: Set<number>
+  setSelectedRows(value: Set<number>): void
+  canUpdate: boolean
+  canDelete: boolean
+  rowLabel(row: Record<string, unknown>): string
+  edit(row: Record<string, unknown>): void
+  remove(row: Record<string, unknown>): void
+  t: ReturnType<typeof translations>
+}
+
+function DataTable({ columns, rows, empty, mutation }: { columns: string[]; rows: Array<Record<string, unknown>>; empty: string; mutation?: DataTableMutation }) {
   if (rows.length === 0) return <div className="table-empty">{empty}</div>
-  return <div className="table-scroll"><table><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{columns.map((column) => <td key={column}>{formatCell(row[column])}</td>)}</tr>)}</tbody></table></div>
+  return <div className="table-scroll"><table><thead><tr>{mutation && <th className="row-select" />}{columns.map((column) => <th key={column}>{column}</th>)}{mutation && <th className="row-actions" />}</tr></thead><tbody>{rows.map((row, index) => { const label = mutation?.rowLabel(row) ?? ''; return <tr key={index}>{mutation && <td className="row-select"><input type="checkbox" aria-label={`${mutation.t('selectRow')} ${label}`} checked={mutation.selectedRows.has(index)} onChange={(event) => { const next = new Set(mutation.selectedRows); if (event.target.checked && next.size < 100) next.add(index); else next.delete(index); mutation.setSelectedRows(next) }} /></td>}{columns.map((column) => <td key={column}>{formatCell(row[column])}</td>)}{mutation && <td className="row-actions">{mutation.canUpdate && <IconButton label={`${mutation.t('editRow')} ${label}`} onClick={() => mutation.edit(row)}><Pencil size={14} /></IconButton>}{mutation.canDelete && <IconButton label={`${mutation.t('deleteRow')} ${label}`} onClick={() => mutation.remove(row)}><Trash2 size={14} /></IconButton>}</td>}</tr>})}</tbody></table></div>
+}
+
+function MutationDialog({ title, inspection, mode, locale, initial, onClose, onSubmit }: { title: string; inspection: DataMutationInspection; mode: 'insert' | 'patch'; locale: Locale; initial?: Record<string, unknown>; onClose: () => void; onSubmit: (values: Record<string, TaggedDatabaseValue>) => void }) {
+  const t = translations(locale)
+  const writable = inspection.table.columns.filter((column) => inspection.policy.writableColumns.includes(column.name))
+  const [included, setIncluded] = useState(() => new Set(mode === 'insert' ? writable.map((column) => column.name) : []))
+  const [modes, setModes] = useState<Record<string, 'value' | 'null' | 'default'>>(() => Object.fromEntries(writable.map((column) => [column.name, 'value'])))
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const data = new FormData(event.currentTarget)
+    const values = Object.fromEntries(writable.filter((column) => included.has(column.name)).map((column) => [column.name, taggedFormValue(column.valueType, modes[column.name] ?? 'value', data.get(column.name))]))
+    onSubmit(values)
+  }
+  return <Modal title={title} onClose={onClose}><form className="mutation-form" onSubmit={submit}>{writable.map((column) => { const active = included.has(column.name); const valueMode = modes[column.name] ?? 'value'; return <div className="mutation-field" key={column.name}>{mode === 'patch' && <div className="check-field"><input type="checkbox" aria-label={`${t('changeColumn')} ${column.name}`} checked={active} onChange={(event) => { const next = new Set(included); if (event.target.checked) next.add(column.name); else next.delete(column.name); setIncluded(next) }} /><span aria-hidden="true">{column.name}</span></div>}<Field label={column.name}><input name={column.name} aria-label={column.name} disabled={!active || valueMode !== 'value'} defaultValue={formValue(initial?.[column.name], column.valueType)} required={active && valueMode === 'value'} /></Field><select className="value-mode" aria-label={`${column.name} mode`} disabled={!active} value={valueMode} onChange={(event) => setModes({ ...modes, [column.name]: event.target.value as 'value' | 'null' | 'default' })}><option value="value">VALUE</option>{column.nullable && <option value="null">NULL</option>}<option value="default">DEFAULT</option></select></div>})}<div className="dialog-actions"><button className="secondary-button" type="button" onClick={onClose}>{t('cancel')}</button><button className="primary-button" type="submit" disabled={included.size === 0}>{t('save')}</button></div></form></Modal>
+}
+
+function taggedFormValue(type: DatabaseValueType | 'unsupported', mode: 'value' | 'null' | 'default', raw: FormDataEntryValue | null): TaggedDatabaseValue {
+  if (mode === 'null') return { kind: 'null' }
+  if (mode === 'default') return { kind: 'default' }
+  const text = String(raw ?? '')
+  if (type === 'number') return { kind: 'value', type, value: Number(text) }
+  if (type === 'boolean') return { kind: 'value', type, value: text === 'true' }
+  if (type === 'json' || type === 'array') return { kind: 'value', type, value: JSON.parse(text) as unknown }
+  if (type === 'unsupported') throw new Error('UNSUPPORTED_VALUE_TYPE')
+  return { kind: 'value', type, value: text }
+}
+
+function encodeRow(row: Record<string, unknown>, inspection: DataMutationInspection): Record<string, TaggedDatabaseValue> {
+  return Object.fromEntries(inspection.table.columns.filter((column) => column.valueType !== 'unsupported').map((column) => [column.name, taggedRawValue(row[column.name], column.valueType)]))
+}
+
+function taggedRawValue(value: unknown, type: DatabaseValueType | 'unsupported'): TaggedDatabaseValue {
+  if (value === null) return { kind: 'null' }
+  if (type === 'unsupported') throw new Error('UNSUPPORTED_VALUE_TYPE')
+  if (type === 'number') return { kind: 'value', type, value: Number(value) }
+  if (type === 'boolean') return { kind: 'value', type, value: Boolean(value) }
+  if (type === 'json' || type === 'array') return { kind: 'value', type, value }
+  if (type === 'binary' && typeof value === 'object' && value !== null && 'data' in value && Array.isArray((value as { data: unknown }).data)) return { kind: 'value', type, value: bytesToBase64((value as { data: number[] }).data) }
+  return { kind: 'value', type, value: String(value) }
+}
+
+function formValue(value: unknown, type: DatabaseValueType | 'unsupported'): string {
+  if (value === null || value === undefined) return ''
+  if (type === 'json' || type === 'array') return JSON.stringify(value)
+  return String(value)
+}
+
+function bytesToBase64(bytes: number[]): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
 }
 
 function ColumnTable({ columns }: { columns: DatabaseColumn[] }) {

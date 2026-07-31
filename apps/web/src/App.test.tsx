@@ -199,6 +199,118 @@ describe('DBWeb application shell', () => {
 
     await waitFor(() => expect(resetBody).toEqual({ host: 'ssh.example.test', port: 2222 }))
   })
+
+  it('creates, updates, and confirms deletion of rows with tagged values', async () => {
+    const mutationBodies: unknown[] = []
+    let rowLoads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json(['public'])
+      if (url.endsWith('/tables')) return Response.json([{ schema: 'public', name: 'products', type: 'table' }])
+      if (url.endsWith('/columns')) return Response.json([{ name: 'id', dataType: 'integer', nullable: false, primaryKey: true }])
+      if (url.includes('/rows?')) {
+        rowLoads += 1
+        return Response.json({ columns: ['id', 'name', 'price'], rows: [{ id: 7, name: 'Keyboard', price: '49.90' }], nextOffset: null })
+      }
+      if (url.endsWith('/mutations') && init?.method !== 'POST') return Response.json(productMutationInspection)
+      if (url.endsWith('/mutations') && init?.method === 'POST') {
+        mutationBodies.push(JSON.parse(String(init.body)))
+        return Response.json({ affectedRows: 1, items: [{ index: 0, affectedRows: 1 }] })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText('Primary PostgreSQL'))
+    expect(await screen.findByText('Keyboard')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '新增資料列' }))
+    let dialog = screen.getByRole('dialog', { name: '新增資料列' })
+    await user.type(within(dialog).getByLabelText('name'), 'Mouse')
+    await user.type(within(dialog).getByLabelText('price'), '19.95')
+    await user.click(within(dialog).getByRole('button', { name: '儲存' }))
+
+    await user.click(await screen.findByRole('button', { name: '編輯資料列 7' }))
+    dialog = screen.getByRole('dialog', { name: '編輯資料列' })
+    await user.click(within(dialog).getByLabelText('變更 name'))
+    await user.clear(within(dialog).getByRole('textbox', { name: 'name' }))
+    await user.type(within(dialog).getByRole('textbox', { name: 'name' }), 'Keyboard Pro')
+    await user.click(within(dialog).getByRole('button', { name: '儲存' }))
+
+    await user.click(await screen.findByRole('button', { name: '刪除資料列 7' }))
+    dialog = screen.getByRole('dialog', { name: '刪除資料列' })
+    await user.click(within(dialog).getByRole('button', { name: '刪除' }))
+
+    await waitFor(() => expect(mutationBodies).toHaveLength(3))
+    expect(mutationBodies[0]).toEqual({ operations: [{ kind: 'insert', values: { name: { kind: 'value', type: 'string', value: 'Mouse' }, price: { kind: 'value', type: 'decimal', value: '19.95' } } }] })
+    expect(mutationBodies[1]).toEqual({ operations: [{ kind: 'update', identity: { id: { kind: 'value', type: 'number', value: 7 } }, original: productOriginal, patch: { name: { kind: 'value', type: 'string', value: 'Keyboard Pro' } } }] })
+    expect(mutationBodies[2]).toEqual({ operations: [{ kind: 'delete', identity: { id: { kind: 'value', type: 'number', value: 7 } }, original: productOriginal, confirmed: true }] })
+    expect(rowLoads).toBeGreaterThanOrEqual(4)
+  })
+
+  it('applies one patch to selected rows as a single batch operation', async () => {
+    let mutationBody: unknown
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json(['public'])
+      if (url.endsWith('/tables')) return Response.json([{ schema: 'public', name: 'products', type: 'table' }])
+      if (url.endsWith('/columns')) return Response.json([])
+      if (url.includes('/rows?')) return Response.json({ columns: ['id', 'name', 'price'], rows: [{ id: 7, name: 'Keyboard', price: '49.90' }, { id: 8, name: 'Mouse', price: '19.95' }], nextOffset: null })
+      if (url.endsWith('/mutations') && init?.method !== 'POST') return Response.json(productMutationInspection)
+      if (url.endsWith('/mutations') && init?.method === 'POST') {
+        mutationBody = JSON.parse(String(init.body))
+        return Response.json({ affectedRows: 2, items: [{ index: 0, affectedRows: 1 }, { index: 1, affectedRows: 1 }] })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText('Primary PostgreSQL'))
+    await user.click(await screen.findByRole('checkbox', { name: '選取資料列 7' }))
+    await user.click(screen.getByRole('checkbox', { name: '選取資料列 8' }))
+    await user.click(screen.getByRole('button', { name: '批次編輯 2 列' }))
+    const dialog = screen.getByRole('dialog', { name: '批次編輯' })
+    await user.click(within(dialog).getByLabelText('變更 price'))
+    await user.clear(within(dialog).getByRole('textbox', { name: 'price' }))
+    await user.type(within(dialog).getByRole('textbox', { name: 'price' }), '39.00')
+    await user.click(within(dialog).getByRole('button', { name: '儲存' }))
+
+    await waitFor(() => expect(mutationBody).toEqual({ operations: [{ kind: 'batch-update', rows: [
+      { identity: { id: { kind: 'value', type: 'number', value: 7 } }, original: productOriginal },
+      { identity: { id: { kind: 'value', type: 'number', value: 8 } }, original: { id: { kind: 'value', type: 'number', value: 8 }, name: { kind: 'value', type: 'string', value: 'Mouse' }, price: { kind: 'value', type: 'decimal', value: '19.95' } } },
+    ], patch: { price: { kind: 'value', type: 'decimal', value: '39.00' } } }] }))
+  })
+
+  it('removes stale mutation controls immediately when switching tables', async () => {
+    let resolveLogsInspection: ((response: Response) => void) | undefined
+    const logsInspection = new Promise<Response>((resolve) => { resolveLogsInspection = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json(['public'])
+      if (url.endsWith('/tables')) return Response.json([{ schema: 'public', name: 'products', type: 'table' }, { schema: 'public', name: 'logs', type: 'table' }])
+      if (url.includes('/logs/mutations')) return logsInspection
+      if (url.endsWith('/mutations')) return Response.json(productMutationInspection)
+      if (url.endsWith('/columns')) return Response.json([])
+      if (url.includes('/rows?')) return Response.json({ columns: [], rows: [], nextOffset: null })
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText('Primary PostgreSQL'))
+    expect(await screen.findByRole('button', { name: '新增資料列' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: /logs/ }))
+    expect(screen.queryByRole('button', { name: '新增資料列' })).not.toBeInTheDocument()
+    resolveLogsInspection?.(Response.json(productMutationInspection))
+  })
 })
 
 const authenticatedSession = {
@@ -224,4 +336,30 @@ const sshConnection = {
   ...connection,
   name: 'Remote PostgreSQL',
   ssh: { enabled: true as const, host: 'ssh.example.test', port: 2222, username: 'operator' },
+}
+
+const productMutationInspection = {
+  table: {
+    schema: 'public',
+    name: 'products',
+    columns: [
+      { name: 'id', valueType: 'number', nullable: false, generated: true },
+      { name: 'name', valueType: 'string', nullable: false, generated: false },
+      { name: 'price', valueType: 'decimal', nullable: false, generated: false },
+    ],
+    uniqueKeys: [{ name: 'products_pkey', kind: 'primary', columns: ['id'] }],
+  },
+  policy: {
+    identity: { name: 'products_pkey', kind: 'primary', columns: ['id'] },
+    writableColumns: ['name', 'price'],
+    readOnlyColumns: ['id'],
+    canUpdate: true,
+    canDelete: true,
+  },
+}
+
+const productOriginal = {
+  id: { kind: 'value', type: 'number', value: 7 },
+  name: { kind: 'value', type: 'string', value: 'Keyboard' },
+  price: { kind: 'value', type: 'decimal', value: '49.90' },
 }
