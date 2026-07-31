@@ -41,4 +41,5 @@
 - 完成雙語進階 DDL UI，結構工作台共 36 項命令並依 live capability 停用不支援項目；前端 App tests 13/13 通過。
 - 擴充四版本 DDL integration，加入進階 view/routine/trigger/event/partition 與方言專屬物件生命週期；本機無 DB 時 4 個 DDL integration cases 明確略過，待 GitHub Actions 真實執行。
 - M3C 推送前本機驗證：Vitest 47 files通過、2 files略過，173 tests通過、6 cases略過；ESLint、workspace strict typecheck、production build及Chromium/Firefox/WebKit核心E2E全綠。
+- M3C首次遠端run `30601615401` 僅MySQL 8.4失敗：binary logging拒絕未宣告`DETERMINISTIC`、`NO SQL`或`READS SQL DATA`的stored function；MySQL 5.6與其餘jobs全綠。依MySQL 8.4官方文件補單元RED，將routine deterministic/data access建模為列舉欄位，MySQL function強制符合至少一項安全聲明，並同步前端與真實integration fixture。
 - 將 Vitest `maxWorkers` 設為2，修復多個正式Argon2 HTTP測試平行競爭造成的5秒逾時；單檔與限制worker後完整測試均通過，產品Argon2設定未變。
