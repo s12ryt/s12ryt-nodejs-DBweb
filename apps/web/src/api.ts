@@ -78,6 +78,19 @@ export interface DataMutationInspection {
   }
 }
 
+export interface DdlCapabilities {
+  engine: 'postgres' | 'mysql'
+  version: { major: number; minor: number; patch: number; assumedMinimum: boolean }
+  transactionalDdl: boolean
+  columnTypes: string[]
+  database: { create: boolean; drop: boolean; rename: boolean; owner: boolean }
+  schema: { create: boolean; drop: boolean; rename: boolean; owner: boolean; databaseAlias: boolean }
+  table: { create: boolean; drop: boolean; rename: boolean; owner: boolean; storageOptions: boolean }
+  column: { generated: boolean; identity: boolean; rename: boolean; renameSyntax: 'rename-column' | 'change-column' }
+  constraint: { check: boolean; foreignKey: boolean; primaryKey: boolean; unique: boolean }
+  index: { methods: string[]; expression: boolean; partial: boolean; prefixLength: boolean }
+}
+
 export interface QueryResult {
   columns: string[]
   rows: Array<Record<string, unknown>>
