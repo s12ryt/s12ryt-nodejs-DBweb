@@ -120,11 +120,11 @@ describe('MysqlNativeAccountGateway', () => {
       canLogin: true,
       connectionLimit: 2,
     })
-    expect(query.mock.calls.map(([sql]) => sql)).toEqual(expect.arrayContaining([
+    expect(query.mock.calls.slice(-3).map(([sql]) => sql)).toEqual([
+      'SELECT VERSION() AS dbweb_version',
       "CREATE USER 'dbweb_nat_test'@'%' IDENTIFIED BY 'strong-password-value'",
-      "UPDATE mysql.user SET max_user_connections = 2 WHERE User = 'dbweb_nat_test' AND Host = '%'",
-      'FLUSH PRIVILEGES',
-    ]))
+      "GRANT USAGE ON *.* TO 'dbweb_nat_test'@'%' WITH MAX_USER_CONNECTIONS 2",
+    ])
 
     await gateway.rotatePassword(
       mysqlConnection,

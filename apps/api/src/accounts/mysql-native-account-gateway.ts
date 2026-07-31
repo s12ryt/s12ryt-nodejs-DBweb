@@ -95,9 +95,8 @@ export class MysqlNativeAccountGateway implements NativeAccountGateway {
         `CREATE USER ${accountSql(identity)} IDENTIFIED BY ${quoteLiteral(request.password)}`,
       )
       await client.query(
-        `UPDATE mysql.user SET max_user_connections = ${connectionLimit} WHERE User = ${quoteLiteral(identity.username)} AND Host = ${quoteLiteral(identity.host)}`,
+        `GRANT USAGE ON *.* TO ${accountSql(identity)} WITH MAX_USER_CONNECTIONS ${connectionLimit}`,
       )
-      await client.query('FLUSH PRIVILEGES')
     })
   }
 
