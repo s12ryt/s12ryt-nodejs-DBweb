@@ -39,4 +39,23 @@ describe('EnvelopeEncryption', () => {
   it('拒絕不是 256-bit 的主密鑰', () => {
     expect(() => new EnvelopeEncryption(Buffer.alloc(16))).toThrow('MASTER_KEY_INVALID')
   })
+
+  it('以用途綁定的二進位 envelope 保存任意 bytes', () => {
+    const encryption = new EnvelopeEncryption(key)
+    const plaintext = Buffer.from([0, 255, 1, 2, 3, 0, 128])
+    const encrypted = encryption.encryptBytes(plaintext, 'transfer-chunk:job-1:0')
+
+    expect(encrypted).toBeInstanceOf(Buffer)
+    expect(encrypted.equals(plaintext)).toBe(false)
+    expect(encryption.decryptBytes(encrypted, 'transfer-chunk:job-1:0')).toEqual(plaintext)
+    expect(() => encryption.decryptBytes(encrypted, 'transfer-chunk:job-2:0')).toThrow(
+      EncryptionError,
+    )
+
+    const tampered = Buffer.from(encrypted)
+    tampered[tampered.length - 1] = (tampered.at(-1) ?? 0) ^ 1
+    expect(() => encryption.decryptBytes(tampered, 'transfer-chunk:job-1:0')).toThrow(
+      EncryptionError,
+    )
+  })
 })
