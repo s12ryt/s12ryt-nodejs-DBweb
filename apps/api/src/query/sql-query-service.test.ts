@@ -4,6 +4,7 @@ import { ConnectionService } from '../connections/connection-service.js'
 import { MemoryConnectionRepository } from '../connections/memory-connection-repository.js'
 import { EnvelopeEncryption } from '../security/envelope-encryption.js'
 import {
+  isReadOnlySql,
   QueryError,
   SqlQueryService,
   type QueryAuditRecorder,
@@ -121,5 +122,43 @@ describe('SqlQueryService', () => {
         }),
       ).rejects.toEqual(new QueryError('INVALID_QUERY'))
     }
+  })
+
+  it('唯讀模式只接受單一讀取語句並要求gateway啟用唯讀交易', async () => {
+    const { service, profile, gateway } = await setup()
+
+    await service.execute('reader-1', {
+      queryId: '55555555-5555-4555-8555-555555555555',
+      connectionId: profile.id,
+      sql: '/* report */ WITH source AS (SELECT 1 AS id) SELECT id FROM source;',
+    }, { readOnly: true })
+
+    expect(gateway.execute).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ readOnly: true }),
+    )
+  })
+
+  it.each([
+    'SELECT 1; SELECT 2',
+    'UPDATE accounts SET enabled = false',
+    'WITH changed AS (DELETE FROM accounts RETURNING id) SELECT * FROM changed',
+    'EXPLAIN ANALYZE DELETE FROM accounts',
+    'SELECT * FROM accounts FOR UPDATE',
+  ])('唯讀模式在連線前拒絕多語句、寫入或鎖定SQL：%s', async (sql) => {
+    const { service, profile, gateway } = await setup()
+
+    await expect(service.execute('reader-1', {
+      queryId: '66666666-6666-4666-8666-666666666666',
+      connectionId: profile.id,
+      sql,
+    }, { readOnly: true })).rejects.toEqual(new QueryError('READ_ONLY_QUERY_REQUIRED'))
+    expect(gateway.execute).not.toHaveBeenCalled()
+  })
+
+  it('唯讀分類忽略字串與註解中的關鍵字，但不接受未知語句', () => {
+    expect(isReadOnlySql("SELECT 'DELETE; UPDATE', 1 -- DROP\n")).toBe(true)
+    expect(isReadOnlySql('SHOW TABLES')).toBe(true)
+    expect(isReadOnlySql('CALL read_report()')).toBe(false)
   })
 })

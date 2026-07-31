@@ -28,7 +28,13 @@ export interface SqlGatewayResult {
 export interface SqlGateway {
   execute(
     connection: ResolvedConnection,
-    request: { sql: string; timeoutMs: number; maxRows: number; signal: AbortSignal },
+    request: {
+      sql: string
+      timeoutMs: number
+      maxRows: number
+      signal: AbortSignal
+      readOnly?: boolean
+    },
   ): Promise<SqlGatewayResult>
 }
 
@@ -46,6 +52,7 @@ type QueryErrorCode =
   | 'INVALID_QUERY'
   | 'QUERY_CANCELLED'
   | 'QUERY_FAILED'
+  | 'READ_ONLY_QUERY_REQUIRED'
   | 'QUERY_TIMEOUT'
 
 export class QueryError extends Error {
@@ -78,10 +85,17 @@ export class SqlQueryService {
     private readonly now: () => number = () => Date.now(),
   ) {}
 
-  async execute(userId: string, input: ExecuteQueryInput) {
+  async execute(
+    userId: string,
+    input: ExecuteQueryInput,
+    options: { readOnly?: boolean } = {},
+  ) {
     const timeoutMs = input.timeoutMs ?? 30_000
     const rowLimit = input.rowLimit ?? 1000
     this.validate(input, timeoutMs, rowLimit)
+    if (options.readOnly && !isReadOnlySql(input.sql)) {
+      throw new QueryError('READ_ONLY_QUERY_REQUIRED')
+    }
     if (isHighRiskSql(input.sql) && input.confirmedHighRisk !== true) {
       throw new QueryError('CONFIRMATION_REQUIRED')
     }
@@ -102,6 +116,7 @@ export class SqlQueryService {
         timeoutMs,
         maxRows: rowLimit + 1,
         signal: controller.signal,
+        readOnly: options.readOnly === true,
       })
       const truncated = result.rows.length > rowLimit
       const rows = truncated ? result.rows.slice(0, rowLimit) : result.rows
@@ -182,4 +197,111 @@ export function isHighRiskSql(sql: string): boolean {
     const keyword = /^\s*([A-Za-z]+)/.exec(statement)?.[1]?.toUpperCase()
     return keyword ? HIGH_RISK_KEYWORDS.has(keyword) : false
   })
+}
+
+const READ_ONLY_FORBIDDEN_KEYWORDS = new Set([
+  'ALTER',
+  'CALL',
+  'COPY',
+  'CREATE',
+  'DELETE',
+  'DROP',
+  'GRANT',
+  'INSERT',
+  'INTO',
+  'LOCK',
+  'MERGE',
+  'RENAME',
+  'REVOKE',
+  'TRUNCATE',
+  'UPDATE',
+])
+
+export function isReadOnlySql(sql: string): boolean {
+  const sanitized = sanitizeSql(sql)
+  if (sanitized === undefined) return false
+  let statement = sanitized.trim()
+  if (statement.endsWith(';')) statement = statement.slice(0, -1).trimEnd()
+  if (!statement || statement.includes(';')) return false
+
+  const tokens = statement.toUpperCase().match(/[A-Z_]+/g) ?? []
+  const first = tokens[0]
+  if (first !== 'SELECT' && first !== 'SHOW' && first !== 'WITH') return false
+  if (tokens.some((token) => READ_ONLY_FORBIDDEN_KEYWORDS.has(token))) return false
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    if (tokens[index] === 'FOR' && (tokens[index + 1] === 'UPDATE' || tokens[index + 1] === 'SHARE')) {
+      return false
+    }
+  }
+  return true
+}
+
+function sanitizeSql(sql: string): string | undefined {
+  let output = ''
+  let index = 0
+  while (index < sql.length) {
+    const current = sql[index] as string
+    const next = sql[index + 1]
+
+    if (current === '-' && next === '-') {
+      const end = sql.indexOf('\n', index + 2)
+      if (end === -1) return output
+      output += ' '.repeat(end - index)
+      index = end
+      continue
+    }
+    if (current === '#') {
+      const end = sql.indexOf('\n', index + 1)
+      if (end === -1) return output
+      output += ' '.repeat(end - index)
+      index = end
+      continue
+    }
+    if (current === '/' && next === '*') {
+      const end = sql.indexOf('*/', index + 2)
+      if (end === -1) return undefined
+      output += ' '.repeat(end + 2 - index)
+      index = end + 2
+      continue
+    }
+    if (current === "'" || current === '"' || current === '`') {
+      const quote = current
+      const start = index
+      index += 1
+      let closed = false
+      while (index < sql.length) {
+        if (sql[index] === '\\') {
+          index += 2
+          continue
+        }
+        if (sql[index] === quote) {
+          if (sql[index + 1] === quote) {
+            index += 2
+            continue
+          }
+          index += 1
+          closed = true
+          break
+        }
+        index += 1
+      }
+      if (!closed) return undefined
+      output += ' '.repeat(index - start)
+      continue
+    }
+    if (current === '$') {
+      const delimiter = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(index))?.[0]
+      if (delimiter) {
+        const end = sql.indexOf(delimiter, index + delimiter.length)
+        if (end === -1) return undefined
+        const consumed = end + delimiter.length - index
+        output += ' '.repeat(consumed)
+        index += consumed
+        continue
+      }
+    }
+    output += current
+    index += 1
+  }
+  return output
 }
