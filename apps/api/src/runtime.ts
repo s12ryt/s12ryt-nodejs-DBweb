@@ -67,6 +67,14 @@ import { SshKnownHostService } from './ssh/ssh-known-host-service.js'
 import { Ssh2TransportFactory } from './ssh/ssh2-transport-factory.js'
 import { SshTunnelPool, type SshTransportFactory } from './ssh/ssh-tunnel-pool.js'
 import { EncryptedChunkStore } from './transfers/encrypted-chunk-store.js'
+import { CsvTransferHandler } from './transfers/csv-transfer-handler.js'
+import { ExactCsvExportService } from './transfers/exact-csv-export-service.js'
+import { ExactCsvImportService } from './transfers/exact-csv-import-service.js'
+import { ExactCsvPackageWriter, readExactCsvPackage } from './transfers/exact-csv-package.js'
+import {
+  ExactCsvExportPreviewCoordinator,
+  ExactCsvImportPreviewCoordinator,
+} from './transfers/exact-csv-preview.js'
 import { ExactJsonExportService } from './transfers/exact-json-export-service.js'
 import { ExactJsonImportPreviewCoordinator } from './transfers/exact-json-import-preview.js'
 import { ExactJsonImportService } from './transfers/exact-json-import-service.js'
@@ -340,6 +348,11 @@ export async function buildRuntime(
       encryption,
       purposeNamespace: 'json-stage',
     })
+    const transferCsvStageStore = new EncryptedChunkStore({
+      root: join(transferRoot, 'csv-stage'),
+      encryption,
+      purposeNamespace: 'csv-stage',
+    })
     const transferUploadService = new TransferUploadService(
       transferJobService,
       transferSourceStore,
@@ -450,11 +463,75 @@ export async function buildRuntime(
       undefined,
       transferAudit,
     )
-    const transferHandlers = new TransferHandlerRouter(transferJobService, {
-      friendlyCsvExport: {
+    const exactCsvExportPreview = new ExactCsvExportPreviewCoordinator(
+      transferJobService,
+      connectionService,
+      dataMutationGateways,
+      transferPreviewPlans,
+      exactJsonAuthorizer,
+    )
+    const exactCsvImportPreview = new ExactCsvImportPreviewCoordinator(
+      transferJobService,
+      connectionService,
+      dataMutationGateways,
+      sourcePackages,
+      { read: readExactCsvPackage },
+      transferPreviewPlans,
+      exactJsonAuthorizer,
+    )
+    const exactCsvPackages = new ExactCsvPackageWriter(
+      new TransferOutputWriter(transferCsvStageStore),
+      transferCsvStageStore,
+      new TransferOutputWriter(transferOutputStore),
+    )
+    const exactCsvExportService = new ExactCsvExportService(
+      transferJobService,
+      connectionService,
+      transferDataGateways,
+      exactCsvPackages,
+      exactCsvExportPreview,
+      (actor, job) => authorizeTransfer(webAccessService, actor, job),
+      undefined,
+      transferAudit,
+    )
+    const exactCsvImportService = new ExactCsvImportService(
+      transferJobService,
+      connectionService,
+      {
+        postgres: new PostgresExactJsonImportGateway(undefined, socketProvider),
+        mysql: new MysqlExactJsonImportGateway(undefined, socketProvider),
+      },
+      sourcePackages,
+      { read: readExactCsvPackage },
+      exactCsvImportPreview,
+      (actor, job) => authorizeTransfer(webAccessService, actor, job),
+      undefined,
+      transferAudit,
+    )
+    const csvTransferHandler = new CsvTransferHandler(
+      transferJobService,
+      transferPreviewPlans,
+      {
         inspect: (...args) => friendlyCsvPreview.inspect(...args),
         execute: (...args) => friendlyCsvExportService.execute(...args),
         cancel: (...args) => friendlyCsvExportService.cancel(...args),
+      },
+      {
+        inspect: (...args) => exactCsvExportPreview.inspect(...args),
+        execute: (...args) => exactCsvExportService.execute(...args),
+        cancel: (...args) => exactCsvExportService.cancel(...args),
+      },
+      {
+        inspect: (...args) => exactCsvImportPreview.inspect(...args),
+        execute: (...args) => exactCsvImportService.execute(...args),
+        cancel: (...args) => exactCsvImportService.cancel(...args),
+      },
+    )
+    const transferHandlers = new TransferHandlerRouter(transferJobService, {
+      friendlyCsvExport: {
+        inspect: (...args) => csvTransferHandler.inspect(...args),
+        execute: (...args) => csvTransferHandler.execute(...args),
+        cancel: (...args) => csvTransferHandler.cancel(...args),
       },
       exactJsonExport: {
         inspect: (...args) => exactJsonExportPreview.inspect(...args),
@@ -476,7 +553,7 @@ export async function buildRuntime(
     )
     const transferCleanupService = new TransferCleanupService(
       transferJobRepository,
-      [transferSourceStore, transferOutputStore, transferJsonStageStore],
+      [transferSourceStore, transferOutputStore, transferJsonStageStore, transferCsvStageStore],
       [transferAuditRepository, transferPreviewPlanRepository],
     )
     transferCleanupScheduler = dependencies.createTransferCleanupScheduler?.(
