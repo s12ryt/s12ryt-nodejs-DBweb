@@ -89,3 +89,7 @@
 - 依RED -> GREEN完成SQL restore同session data loader：exact tagged NDJSON欄位/DDL重驗、bigint/decimal/NULL、PG sequence及MySQL AUTO_INCREMENT同步；PG失敗rollback進度0，MySQL保留已套用step。active restore cancel會abort並等待rollback/close，不只改job狀態。
 - 完成SQL dump staging package writer、snapshot catalog與export service；lazy entry在同一唯讀snapshot中完整消費。PG核心表snapshot支援9.6 serial與10+ identity，MySQL支援AUTO_INCREMENT、FK及8.0.16+ enforced CHECK。
 - 完成SQL export/restore preview、handler router、runtime與HTTP安全映射；restore driver訊息不外洩，MySQL只回appliedSteps/failedStep。完整本機回歸為114 files、435 tests通過，lint/typecheck/build及Playwright 7 passed/2 skipped全綠；進階物件catalog、Web UI及四版本進階roundtrip仍待完成。
+- 完成雙語 SQL dump/restore Web設定：export支援database/schema/table scope、gzip及include-data；restore支援target database、existing-object模式、目標DB名稱確認、skip unsupported及drop/issue preview。preview token只保存在React state，App tests 25/25通過。
+- SQL roundtrip前以RED修正MySQL partition初始化與後續ADD語意、PostgreSQL partitioned parent key、trigger pseudo-return type及extension-owned routine排除；restore phase確保parent table後建立partition child，再載入parent data。
+- 新增`sql-dump.integration.test.ts`，完全沿用正式PG/MySQL snapshot catalog、AES-GCM staging/output、checksummed gzip package、restore plan/session與tagged data loader，涵蓋core data/identity及版本支援的view/routine/trigger/partition/event與PG專屬進階物件；workflow已納入PG9.6/17、MySQL5.6/8.4，等待遠端實跑。
+- M5C候選本機驗證：Vitest 114 files通過、5 integration files略過，441 tests通過、14個無本機DB cases略過；YAML lint、ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases依設定略過。四版本SQL roundtrip尚未取得遠端證據，不宣告M5C完成。
