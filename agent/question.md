@@ -1,6 +1,6 @@
 # DBWeb 已確認需求契約
 
-更新日期：2026-07-31
+更新日期：2026-08-01
 
 ## 產品目標
 
@@ -192,3 +192,36 @@
 - 匯出CSV/JSON資料需要 `data-read`；含結構的SQL dump需要 `structure-read`，若包含資料另需 `data-read`；CSV/JSON匯入需要 `data-write`；SQL restore同時需要 `ddl-write`與`data-write`。所有能力在建立、preview、執行、續傳、取消與下載等敏感邊界逐請求即時檢查，管理員維持全權。
 - M5 UI提供雙語job中心、建立匯出、分段上傳、preview、欄位映射、策略與交易模式、確認、進度、取消、續傳及授權下載。固定尺寸與響應式控制不得在桌面/手機重疊。
 - 自動驗收在PostgreSQL 9.6/17與MySQL 5.6/8.4驗證CSV、精確多表JSON、M3C進階SQL dump round-trip、三種衝突策略、批次partial與整檔rollback、identity及相依排序。Chromium/Firefox/WebKit E2E涵蓋job核心流程；Docker image、完整unit/integration、lint、strict typecheck與production build必須全綠。
+
+## 第六里程碑 HA、效能與安全契約
+
+### 多實例拓撲與權威狀態
+
+- HA驗收拓撲為兩個主動DBWeb實例加一個待命實例；負載平衡器以健康檢查自動移除故障主動實例並讓待命加入流量與worker競爭，30秒內恢復服務。已提交metadata不得遺失，具lease的工作允許按at-least-once語意重新執行。
+- 多實例模式以PostgreSQL保存session、job、lease、排程及所有metadata權威狀態。Redis承擔session cache、失效通知、工作喚醒、分散協調與快速queue claim，但不得成為唯一權威；Redis故障時自動降級為PostgreSQL路徑，恢復後由PostgreSQL重建加速狀態。
+- Redis circuit breaker在連續三次失敗或兩秒內不可達時進入降級；30秒後探測，連續三次成功才恢復Redis加速。降級與恢復期間權威始終是PostgreSQL，不容許Redis/DB split brain。
+- Session使用PostgreSQL user/session revision與Redis Pub/Sub失效事件；停用、登出、角色/密碼/能力變更交易提交後發布失效，各實例清除cache。cache使用短TTL，cache miss或revision不符時讀PostgreSQL；Redis失效時全量走PostgreSQL，因此既有「撤銷下一請求生效」契約不降級。
+- Transfer與排程工作採PostgreSQL原子claim及lease owner/expiry，支援`SKIP LOCKED`等方言能力；Redis只負責喚醒。lease為60秒、每20秒心跳續租，程序死亡後可重領；最多五次指數退避，超限標failed並由人工重試。worker必須冪等，系統只承諾at-least-once，不宣稱exactly-once。
+- 多實例同時啟動時以PostgreSQL advisory lock序列化metadata migration，其餘實例等待後驗證schema版本；migration不依賴Redis。SQLite單機模式維持現有低門檻行為。
+
+### S3相容共享物件與健康狀態
+
+- HA transfer source/output/staging使用S3-compatible object storage，正式設定涵蓋AWS S3與MinIO：optional endpoint、region、bucket、default credential chain或access/secret、path-style選項及TLS驗證。CI以MinIO執行真實驗收。
+- S3物件沿用應用層AES-256-GCM分段加密、job/namespace/index用途綁定及SHA-256完整性；SSE可額外啟用但不能取代應用層加密。bucket、object key、log與metadata不得包含明文資料或憑證。
+- 共享object store維持M5的冪等chunk、衝突拒絕、連續index、24小時/7天/90天保留與清理語意；跨實例cleanup與multipart/partial artifact必須由DB lease協調，不能重複刪除或留下無metadata可追蹤的物件。
+- 健康檢查分為liveness、readiness與degraded狀態。liveness只表示程序可回應；readiness要求PostgreSQL與必要S3可用；Redis失效時服務仍ready但標degraded並使用PostgreSQL fallback。回應不得暴露連線字串、bucket credential或內部錯誤。
+
+### 連線、百萬列與串流
+
+- 約100個connection設定下採全域與每connection雙層閘門：每connection預設最多10個DB操作、所有實例合計最多100個；超額最多排隊30秒，之後回可重試的429/503。全域配額由PostgreSQL權威lease並可由Redis加速，擴容不得放大外部DB最大壓力。
+- 百萬列資料表優先使用PK或穩定非空unique key的keyset cursor分頁，UI支援前後瀏覽。無穩定鍵時保留offset模式但最大offset為100,000並顯示可能緩慢警告，超出範圍拒絕。
+- 新增SQL結果NDJSON串流路徑，具背壓、Abort取消、query timeout、row/byte截斷與安全錯誤。預設最多100,000列或256MiB，任一先到即截斷；管理員可調至最多1,000,000列或2GiB，timeout可由30秒調至最多5分鐘。不得將完整結果載入記憶體。
+- M5 transfer匯入匯出亦納入百萬列驗收，必須維持快照、分段加密、串流parser/backpressure、partial rollback及記憶體上限。資料表keyset瀏覽、SQL NDJSON與transfer三條路徑都要有自動化負載證據。
+
+### 效能、安全與完成門檻
+
+- 負載情境為100個connection設定、10位同時操作者及百萬列資料集；每輪先warmup兩分鐘，再steady十分钟。GitHub hosted runner不宣稱固定硬體，測試在同一runner同一run先量baseline再量候選。
+- 相對硬門檻：讀取p95、寫入p95與串流首byte不得比同run baseline退化超過15%，吞吐不得下降超過15%；錯誤率必須低於1%；三個DBWeb實例RSS合計低於1.5GiB，十分鐘steady期間不得持續成長超過10%。輸出p50/p95/p99、吞吐、錯誤率、RSS及runner規格供追蹤。
+- PR可跑短時間smoke；main/release必須跑兩分鐘warmup加十分鐘steady的完整門檻。共享runner規格與負載異常必須明確標示，不得把未執行或不可比結果宣稱通過。
+- 安全阻擋條件包含：`pnpm audit`高/嚴重漏洞為零、CycloneDX SBOM、追蹤檔secret scan、容器非root/read-only、HTTP安全標頭/CSRF/身份與能力回歸，以及惡意tar/package/path/checksum/SQL fragment/輸入注入fuzz。任何未處理重大或高風險問題阻擋交付。
+- M6自動驗收須涵蓋三實例session共享與即時撤銷、Redis故障降級/恢復、worker故障lease接手、待命30秒內晉升、MinIO加密chunk跨實例續傳/下載/cleanup、PostgreSQL migration advisory lock、全域連線閘門、百萬列三路徑、完整三瀏覽器E2E、Docker/HA compose、unit/integration、lint、strict typecheck與production build。
