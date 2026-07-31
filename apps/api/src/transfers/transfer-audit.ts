@@ -10,6 +10,7 @@ export type TransferAuditAction =
   | 'job-cancel'
   | 'download'
   | 'export'
+  | 'import'
 
 export interface TransferAuditDetails {
   includeData?: boolean
