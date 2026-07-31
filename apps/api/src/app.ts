@@ -13,6 +13,11 @@ import type { ConnectionInput } from './connections/connection-types.js'
 import { DatabaseConnectionError } from './connections/connector-error.js'
 import { ExplorerError, type DatabaseExplorer } from './database/database-explorer.js'
 import {
+  DataMutationError,
+  type DataMutationRequest,
+  type DataMutationService,
+} from './data/data-mutation-service.js'
+import {
   QueryError,
   type ExecuteQueryInput,
   type SqlQueryService,
@@ -23,6 +28,7 @@ interface BuildAppOptions {
   authService: AuthService
   connectionService?: ConnectionService
   databaseExplorer?: DatabaseExplorer
+  dataMutationService?: DataMutationService
   queryService?: SqlQueryService
   sshKnownHostService?: SshKnownHostService
   csrfSecret: Buffer
@@ -55,12 +61,17 @@ const messages = {
     INVALID_PAGE: 'Invalid page parameters',
     INVALID_QUERY: 'Invalid query parameters',
     INVALID_CSRF: 'Invalid CSRF token',
+    INVALID_MUTATION: 'Invalid data mutation',
     INVALID_SESSION: 'Authentication required',
     SESSION_EXPIRED: 'Session expired',
     QUERY_CANCELLED: 'Query cancelled',
     QUERY_FAILED: 'Query execution failed',
     QUERY_NOT_ACTIVE: 'Query is not active',
     QUERY_TIMEOUT: 'Query timed out',
+    MUTATION_FAILED: 'Data mutation failed',
+    ROW_CONFLICT: 'The row changed or no longer exists',
+    TABLE_WITHOUT_STABLE_KEY: 'Table has no stable unique key',
+    UNSUPPORTED_COLUMN: 'Column cannot be modified',
     UNAUTHORIZED: 'Authentication required',
     USERNAME_TAKEN: 'Username is already in use',
     WEAK_PASSWORD: 'Password must contain at least 12 characters',
@@ -78,12 +89,17 @@ const messages = {
     INVALID_PAGE: '分頁參數無效',
     INVALID_QUERY: '查詢參數無效',
     INVALID_CSRF: 'CSRF 驗證失敗',
+    INVALID_MUTATION: '資料異動內容無效',
     INVALID_SESSION: '需要登入',
     SESSION_EXPIRED: '登入階段已過期',
     QUERY_CANCELLED: '查詢已取消',
     QUERY_FAILED: '查詢執行失敗',
     QUERY_NOT_ACTIVE: '查詢未在執行中',
     QUERY_TIMEOUT: '查詢逾時',
+    MUTATION_FAILED: '資料異動失敗',
+    ROW_CONFLICT: '資料列已變更或不存在',
+    TABLE_WITHOUT_STABLE_KEY: '資料表沒有穩定的唯一鍵',
+    UNSUPPORTED_COLUMN: '欄位不可修改',
     UNAUTHORIZED: '需要登入',
     USERNAME_TAKEN: '使用者名稱已被使用',
     WEAK_PASSWORD: '密碼至少需要 12 個字元',
@@ -574,6 +590,108 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         const cancelled = await queryService.cancel(user.id, request.params.id)
         if (!cancelled) return sendError(request, reply, 404, 'QUERY_NOT_ACTIVE')
         return reply.code(204).send()
+      },
+    )
+  }
+
+  if (options.dataMutationService) {
+    const mutationService = options.dataMutationService
+    const mutationParamsSchema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'schema', 'table'],
+      properties: {
+        id: { type: 'string', minLength: 1, maxLength: 128 },
+        schema: { type: 'string', minLength: 1, maxLength: 128 },
+        table: { type: 'string', minLength: 1, maxLength: 128 },
+      },
+    } as const
+
+    async function handleMutation(
+      request: FastifyRequest,
+      reply: FastifyReply,
+      action: (actor: AuthUser) => Promise<unknown>,
+    ) {
+      const actor = await authenticate(request, reply)
+      if (!actor) return
+      if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
+      try {
+        return await action(actor)
+      } catch (error) {
+        if (error instanceof ConnectionError) {
+          return sendError(request, reply, 404, error.code)
+        }
+        if (error instanceof DataMutationError) {
+          const statusCode = {
+            CONFIRMATION_REQUIRED: 409,
+            FORBIDDEN: 403,
+            INVALID_MUTATION: 422,
+            MUTATION_FAILED: 502,
+            ROW_CONFLICT: 409,
+            TABLE_WITHOUT_STABLE_KEY: 422,
+            UNSUPPORTED_COLUMN: 422,
+          }[error.code]
+          if (error.code === 'ROW_CONFLICT' && error.operationIndex !== undefined) {
+            return reply.code(statusCode).send({
+              error: {
+                code: error.code,
+                message: messages[localeOf(request)][error.code],
+                operationIndex: error.operationIndex,
+              },
+            })
+          }
+          return sendError(request, reply, statusCode, error.code)
+        }
+        if (error instanceof DatabaseConnectionError) {
+          return sendError(request, reply, 502, 'MUTATION_FAILED')
+        }
+        throw error
+      }
+    }
+
+    type MutationParams = { id: string; schema: string; table: string }
+    const mutationUrl = '/api/connections/:id/schemas/:schema/tables/:table/mutations'
+
+    app.get<{ Params: MutationParams }>(
+      mutationUrl,
+      { schema: { params: mutationParamsSchema } },
+      async (request, reply) => handleMutation(request, reply, (actor) => mutationService.inspect(actor, {
+        connectionId: request.params.id,
+        schema: request.params.schema,
+        table: request.params.table,
+      })),
+    )
+
+    app.post<{ Params: MutationParams; Body: Pick<DataMutationRequest, 'operations'> }>(
+      mutationUrl,
+      {
+        schema: {
+          params: mutationParamsSchema,
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['operations'],
+            properties: {
+              operations: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 100,
+                items: { type: 'object', additionalProperties: true },
+              },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor || !validateCsrf(request, reply)) return
+        if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
+        return handleMutation(request, reply, () => mutationService.mutate(actor, {
+          connectionId: request.params.id,
+          schema: request.params.schema,
+          table: request.params.table,
+          operations: request.body.operations,
+        }))
       },
     )
   }
