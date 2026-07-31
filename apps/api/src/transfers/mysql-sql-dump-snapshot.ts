@@ -638,8 +638,7 @@ function mapPartitionObjects(rows: Record<string, unknown>[]): SqlDumpObject[] {
     const rawMethod = requiredString(row.dbweb_partition_method).toLowerCase()
     if (rawMethod !== 'range' && rawMethod !== 'list') failed()
     const method: 'range' | 'list' = rawMethod
-    const expression = requiredString(row.dbweb_partition_expression).trim()
-    if (!expression) failed()
+    const expression = normalizeMysqlPartitionExpression(requiredString(row.dbweb_partition_expression))
     const tableKey = `${schema}\0${table}`
     const existing = partitioningByTable.get(tableKey)
     if (existing !== undefined && (existing.method !== method || existing.expression !== expression)) failed()
@@ -647,6 +646,16 @@ function mapPartitionObjects(rows: Record<string, unknown>[]): SqlDumpObject[] {
     partitioningByTable.set(tableKey, { method, expression })
     return mapPartitionObject(row, initialize)
   })
+}
+
+function normalizeMysqlPartitionExpression(value: string): string {
+  const expression = value.trim()
+  if (!expression) failed()
+  const quotedIdentifier = /^`((?:``|[^`])+)`$/.exec(expression)
+  if (quotedIdentifier === null) return expression
+  const identifier = quotedIdentifier[1]!.replaceAll('``', '`')
+  if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(identifier)) failed()
+  return identifier
 }
 
 function mapPartitionObject(

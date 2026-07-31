@@ -233,12 +233,12 @@ describe('MySQL SQL dump snapshot', () => {
           {
             dbweb_partition_schema: 'app', dbweb_partition_table: 'orders',
             dbweb_partition_name: 'p2026', dbweb_partition_method: 'RANGE',
-            dbweb_partition_expression: 'id', dbweb_partition_description: '1000',
+            dbweb_partition_expression: '`id`', dbweb_partition_description: '1000',
           },
           {
             dbweb_partition_schema: 'app', dbweb_partition_table: 'orders',
             dbweb_partition_name: 'pmax', dbweb_partition_method: 'RANGE',
-            dbweb_partition_expression: 'id', dbweb_partition_description: 'MAXVALUE',
+            dbweb_partition_expression: '`id`', dbweb_partition_description: 'MAXVALUE',
           },
         ])
         else done(undefined, [])

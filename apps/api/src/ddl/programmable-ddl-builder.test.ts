@@ -151,6 +151,11 @@ describe('partition DDL statements', () => {
     })).toEqual([
       'ALTER TABLE `app`.`events` PARTITION BY RANGE (id) (PARTITION `events_2026` VALUES LESS THAN (2027))',
     ])
+    expect(() => buildDdlStatements(mysql56, {
+      kind: 'create-partition', schema: 'app', table: 'events', name: 'events_2026',
+      definition: 'VALUES LESS THAN (2027)',
+      initialize: { method: 'range', expression: '`id`' }, confirmed: true,
+    })).toThrow(new DdlValidationError('DDL_INVALID_FRAGMENT'))
     expect(() => buildDdlStatements(postgres11, {
       kind: 'create-partition', schema: 'public', table: 'events', name: 'events_2026',
       definition: 'FOR VALUES FROM (1) TO (2027)',
