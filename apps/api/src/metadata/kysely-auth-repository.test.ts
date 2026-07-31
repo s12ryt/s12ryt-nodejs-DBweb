@@ -81,4 +81,63 @@ describe('KyselyAuthRepository with SQLite', () => {
     const rejection = outcomes.find((outcome) => outcome.status === 'rejected')
     expect(rejection).toMatchObject({ reason: new AuthError('USERNAME_TAKEN') })
   })
+
+  it('並行降權兩位可用管理員時原子保留其中一位', async () => {
+    const database = await openSqlite(':memory:')
+    const service = createService(new KyselyAuthRepository(database))
+    const first = await service.createUser({
+      username: 'first-admin',
+      password: 'first admin password',
+      role: 'admin',
+    })
+    const second = await service.createUser({
+      username: 'second-admin',
+      password: 'second admin password',
+      role: 'admin',
+    })
+
+    const outcomes = await Promise.allSettled([
+      service.setUserRole(first, first.id, 'user'),
+      service.setUserRole(second, second.id, 'user'),
+    ])
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toEqual([
+      expect.objectContaining({ reason: new AuthError('LAST_ENABLED_ADMIN') }),
+    ])
+    const users = await new KyselyAuthRepository(database).listUsers()
+    expect(users.filter((user) => user.enabled && user.role === 'admin')).toHaveLength(1)
+  })
+
+  it('舊版users資料表migration補齊生命週期欄位且既有帳號預設啟用', async () => {
+    const database = createMetadataDatabase({ kind: 'sqlite', filename: ':memory:' })
+    openDatabases.push(database)
+    await database.schema
+      .createTable('users')
+      .addColumn('id', 'varchar(36)', (column) => column.primaryKey())
+      .addColumn('username', 'varchar(128)', (column) => column.notNull())
+      .addColumn('normalized_username', 'varchar(128)', (column) => column.notNull().unique())
+      .addColumn('password_hash', 'varchar(512)', (column) => column.notNull())
+      .addColumn('role', 'varchar(16)', (column) => column.notNull())
+      .addColumn('created_at', 'varchar(35)', (column) => column.notNull())
+      .execute()
+    await database
+      .insertInto('users')
+      .values({
+        id: 'legacy-admin',
+        username: 'admin',
+        normalized_username: 'admin',
+        password_hash: 'legacy-hash',
+        role: 'admin',
+        created_at: '2026-07-31T00:00:00.000Z',
+      })
+      .execute()
+
+    await migrateMetadata(database)
+
+    await expect(new KyselyAuthRepository(database).findUserById('legacy-admin')).resolves.toMatchObject({
+      enabled: true,
+      passwordChangeRequired: false,
+    })
+  })
 })

@@ -2,8 +2,10 @@ import type {
   AuthRepository,
   StoredSession,
   StoredUser,
+  UserLifecycleMutationResult,
 } from '../auth/auth-types.js'
 import { DuplicateUsernameError } from '../auth/auth-types.js'
+import { sql } from 'kysely'
 import type { MetadataKysely } from './metadata-database.js'
 
 function isUniqueConstraintError(error: unknown): boolean {
@@ -25,6 +27,8 @@ export class KyselyAuthRepository implements AuthRepository {
           normalized_username: user.normalizedUsername,
           password_hash: user.passwordHash,
           role: user.role,
+          enabled: user.enabled ? 1 : 0,
+          password_change_required: user.passwordChangeRequired ? 1 : 0,
           created_at: user.createdAt,
         })
         .execute()
@@ -43,6 +47,11 @@ export class KyselyAuthRepository implements AuthRepository {
     return user ? this.mapUser(user) : undefined
   }
 
+  async listUsers(): Promise<StoredUser[]> {
+    const users = await this.database.selectFrom('users').selectAll().orderBy('username').execute()
+    return users.map((user) => this.mapUser(user))
+  }
+
   async findUserById(id: string): Promise<StoredUser | undefined> {
     const user = await this.database
       .selectFrom('users')
@@ -50,6 +59,69 @@ export class KyselyAuthRepository implements AuthRepository {
       .where('id', '=', id)
       .executeTakeFirst()
     return user ? this.mapUser(user) : undefined
+  }
+
+  async updateUserAndRevokeSessions(
+    id: string,
+    changes: Partial<Pick<StoredUser, 'enabled' | 'passwordChangeRequired' | 'passwordHash' | 'role'>>,
+    protectLastEnabledAdmin: boolean,
+  ): Promise<UserLifecycleMutationResult> {
+    return await this.database.transaction().execute(async (transaction) => {
+      await transaction
+        .updateTable('auth_lifecycle_lock')
+        .set({ revision: sql<number>`revision + 1` })
+        .where('id', '=', 1)
+        .execute()
+      const user = await transaction.selectFrom('users').selectAll().where('id', '=', id).executeTakeFirst()
+      if (!user) return 'not-found'
+      if (
+        protectLastEnabledAdmin &&
+        user.enabled === 1 &&
+        user.role === 'admin' &&
+        (await this.enabledAdminCount(transaction)) <= 1
+      ) {
+        return 'last-enabled-admin'
+      }
+      await transaction
+        .updateTable('users')
+        .set({
+          ...(changes.enabled === undefined ? {} : { enabled: changes.enabled ? 1 : 0 }),
+          ...(changes.passwordChangeRequired === undefined
+            ? {}
+            : { password_change_required: changes.passwordChangeRequired ? 1 : 0 }),
+          ...(changes.passwordHash === undefined ? {} : { password_hash: changes.passwordHash }),
+          ...(changes.role === undefined ? {} : { role: changes.role }),
+        })
+        .where('id', '=', id)
+        .execute()
+      await transaction.deleteFrom('sessions').where('user_id', '=', id).execute()
+      return 'updated'
+    })
+  }
+
+  async deleteUserAndRevokeSessions(
+    id: string,
+    protectLastEnabledAdmin: boolean,
+  ): Promise<UserLifecycleMutationResult> {
+    return await this.database.transaction().execute(async (transaction) => {
+      await transaction
+        .updateTable('auth_lifecycle_lock')
+        .set({ revision: sql<number>`revision + 1` })
+        .where('id', '=', 1)
+        .execute()
+      const user = await transaction.selectFrom('users').selectAll().where('id', '=', id).executeTakeFirst()
+      if (!user) return 'not-found'
+      if (
+        protectLastEnabledAdmin &&
+        user.enabled === 1 &&
+        user.role === 'admin' &&
+        (await this.enabledAdminCount(transaction)) <= 1
+      ) {
+        return 'last-enabled-admin'
+      }
+      await transaction.deleteFrom('users').where('id', '=', id).execute()
+      return 'updated'
+    })
   }
 
   async createSession(session: StoredSession): Promise<void> {
@@ -101,6 +173,8 @@ export class KyselyAuthRepository implements AuthRepository {
     normalized_username: string
     password_hash: string
     role: 'admin' | 'user'
+    enabled: number
+    password_change_required: number
     created_at: string
   }): StoredUser {
     return {
@@ -109,7 +183,20 @@ export class KyselyAuthRepository implements AuthRepository {
       normalizedUsername: user.normalized_username,
       passwordHash: user.password_hash,
       role: user.role,
+      enabled: user.enabled === 1,
+      passwordChangeRequired: user.password_change_required === 1,
       createdAt: user.created_at,
     }
+  }
+
+
+  private async enabledAdminCount(database: MetadataKysely): Promise<number> {
+    const result = await database
+      .selectFrom('users')
+      .select((expression) => expression.fn.countAll<number>().as('count'))
+      .where('role', '=', 'admin')
+      .where('enabled', '=', 1)
+      .executeTakeFirstOrThrow()
+    return Number(result.count)
   }
 }
