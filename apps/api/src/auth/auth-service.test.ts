@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
+import { EnvelopeEncryption } from '../security/envelope-encryption.js'
+import {
+  EncryptedSecurityAuditRecorder,
+  MemorySecurityAuditRepository,
+} from '../security/security-audit.js'
 import { AuthError, AuthService } from './auth-service.js'
 import { MemoryAuthRepository } from './memory-auth-repository.js'
 
@@ -31,7 +36,13 @@ describe('AuthService', () => {
     const login = await service.login('admin', 'correct horse battery staple')
 
     expect(login.token).toMatch(/^[A-Za-z0-9_-]{43}$/)
-    expect(login.user).toEqual({ id: user.id, username: 'admin', role: 'admin' })
+    expect(login.user).toEqual({
+      id: user.id,
+      username: 'admin',
+      role: 'admin',
+      enabled: true,
+      passwordChangeRequired: false,
+    })
     expect(repository.getStoredSession(login.sessionId)?.tokenHash).not.toBe(login.token)
   })
 
@@ -98,5 +109,150 @@ describe('AuthService', () => {
     await service.logout(login.token)
 
     await expect(service.authenticate(login.token)).rejects.toEqual(new AuthError('INVALID_SESSION'))
+  })
+
+  it('停用使用者會撤銷全部 session，停用帳號不能再登入', async () => {
+    const { service } = setup()
+    const admin = await service.createUser({
+      username: 'admin',
+      password: 'valid password 123',
+      role: 'admin',
+    })
+    const operator = await service.createUser({
+      username: 'operator',
+      password: 'operator password 123',
+      role: 'user',
+    })
+    const first = await service.login('operator', 'operator password 123')
+    const second = await service.login('operator', 'operator password 123')
+
+    await service.setUserEnabled(admin, operator.id, false)
+
+    await expect(service.authenticate(first.token)).rejects.toEqual(new AuthError('INVALID_SESSION'))
+    await expect(service.authenticate(second.token)).rejects.toEqual(new AuthError('INVALID_SESSION'))
+    await expect(service.login('operator', 'operator password 123')).rejects.toEqual(
+      new AuthError('INVALID_CREDENTIALS'),
+    )
+  })
+
+  it('禁止停用或降權最後一位可用管理員，並撤銷角色變更者的全部 session', async () => {
+    const { service } = setup()
+    const admin = await service.createUser({
+      username: 'admin',
+      password: 'valid password 123',
+      role: 'admin',
+    })
+    const login = await service.login('admin', 'valid password 123')
+
+    await expect(service.setUserEnabled(admin, admin.id, false)).rejects.toEqual(
+      new AuthError('LAST_ENABLED_ADMIN'),
+    )
+    await expect(service.setUserRole(admin, admin.id, 'user')).rejects.toEqual(
+      new AuthError('LAST_ENABLED_ADMIN'),
+    )
+
+    const backup = await service.createUser({
+      username: 'backup-admin',
+      password: 'backup password 123',
+      role: 'admin',
+    })
+    await service.setUserRole(backup, admin.id, 'user')
+
+    await expect(service.authenticate(login.token)).rejects.toEqual(new AuthError('INVALID_SESSION'))
+    await expect(service.listUsers(backup)).resolves.toContainEqual(
+      expect.objectContaining({ id: admin.id, role: 'user', enabled: true }),
+    )
+  })
+
+  it('管理員重設密碼後只回傳當次臨時密碼，使用者必須先改密碼才能解除旗標', async () => {
+    const { service } = setup()
+    const admin = await service.createUser({
+      username: 'admin',
+      password: 'valid password 123',
+      role: 'admin',
+    })
+    const operator = await service.createUser({
+      username: 'operator',
+      password: 'operator password 123',
+      role: 'user',
+    })
+    const oldSession = await service.login('operator', 'operator password 123')
+
+    const reset = await service.resetUserPassword(admin, operator.id)
+
+    expect(reset.temporaryPassword).toMatch(/^[A-Za-z0-9_-]{20}$/)
+    await expect(service.authenticate(oldSession.token)).rejects.toEqual(new AuthError('INVALID_SESSION'))
+    const temporaryLogin = await service.login('operator', reset.temporaryPassword)
+    expect(temporaryLogin.user.passwordChangeRequired).toBe(true)
+
+    await service.changeOwnPassword(temporaryLogin.user, reset.temporaryPassword, 'new password 456')
+
+    await expect(service.authenticate(temporaryLogin.token)).rejects.toEqual(
+      new AuthError('INVALID_SESSION'),
+    )
+    const changedLogin = await service.login('operator', 'new password 456')
+    expect(changedLogin.user.passwordChangeRequired).toBe(false)
+  })
+
+  it('永久刪除使用者會清除 session，且不能刪除最後一位可用管理員', async () => {
+    const { service } = setup()
+    const admin = await service.createUser({
+      username: 'admin',
+      password: 'valid password 123',
+      role: 'admin',
+    })
+    const operator = await service.createUser({
+      username: 'operator',
+      password: 'operator password 123',
+      role: 'user',
+    })
+    const login = await service.login('operator', 'operator password 123')
+
+    await expect(service.deleteUser(admin, admin.id)).rejects.toEqual(
+      new AuthError('LAST_ENABLED_ADMIN'),
+    )
+    await service.deleteUser(admin, operator.id)
+
+    await expect(service.authenticate(login.token)).rejects.toEqual(new AuthError('INVALID_SESSION'))
+    await expect(service.login('operator', 'operator password 123')).rejects.toEqual(
+      new AuthError('INVALID_CREDENTIALS'),
+    )
+  })
+
+  it('生命週期成功與最後管理員保護失敗皆寫安全稽核且不含密碼', async () => {
+    const repository = new MemoryAuthRepository()
+    const auditRepository = new MemorySecurityAuditRepository()
+    const service = new AuthService(
+      repository,
+      {
+        idleTimeoutMs: 30 * 60_000,
+        absoluteTimeoutMs: 12 * 60 * 60_000,
+        now: () => baseTime,
+        passwordHashOptions: testHashOptions,
+      },
+      new EncryptedSecurityAuditRecorder(
+        auditRepository,
+        new EnvelopeEncryption(Buffer.alloc(32, 61)),
+        () => baseTime,
+      ),
+    )
+    const admin = await service.createUser({
+      username: 'admin',
+      password: 'valid password 123',
+      role: 'admin',
+    })
+    const created = await service.createManagedUser(admin, { username: 'operator', role: 'user' })
+    await service.resetUserPassword(admin, created.user.id, 'temporary password 123')
+    await expect(service.setUserRole(admin, admin.id, 'user')).rejects.toEqual(
+      new AuthError('LAST_ENABLED_ADMIN'),
+    )
+
+    const events = await auditRepository.list()
+    expect(events.map(({ action, status }) => ({ action, status }))).toEqual([
+      { action: 'web-user-create', status: 'success' },
+      { action: 'password-reset', status: 'success' },
+      { action: 'web-user-role-change', status: 'failed' },
+    ])
+    expect(JSON.stringify(events)).not.toContain('temporary password 123')
   })
 })
