@@ -79,6 +79,9 @@ export interface TransferJob {
   processedRows: number
   processedTables: number
   errorCount: number
+  sourceBytes?: number
+  sourceChecksum?: string
+  uploadCompletedAt?: string
   createdAt: string
   updatedAt: string
   expiresAt: string
