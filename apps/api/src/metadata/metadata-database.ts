@@ -218,6 +218,13 @@ interface TransferAuditsTable {
   expires_at: string
 }
 
+interface TransferPreviewPlansTable {
+  job_id: string
+  encrypted_payload: string
+  expires_at: string
+  updated_at: string
+}
+
 export interface MetadataDatabase {
   auth_lifecycle_lock: AuthLifecycleLockTable
   users: UsersTable
@@ -234,6 +241,7 @@ export interface MetadataDatabase {
   transfer_job_lock: TransferJobLockTable
   transfer_jobs: TransferJobsTable
   transfer_audits: TransferAuditsTable
+  transfer_preview_plans: TransferPreviewPlansTable
   web_access_assignments: WebAccessAssignmentsTable
 }
 
@@ -491,6 +499,15 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .execute()
 
   await database.schema
+    .createTable('transfer_preview_plans')
+    .ifNotExists()
+    .addColumn('job_id', 'varchar(36)', (column) => column.primaryKey())
+    .addColumn('encrypted_payload', 'text', (column) => column.notNull())
+    .addColumn('expires_at', 'varchar(35)', (column) => column.notNull())
+    .addColumn('updated_at', 'varchar(35)', (column) => column.notNull())
+    .execute()
+
+  await database.schema
     .createTable('query_audits')
     .ifNotExists()
     .addColumn('id', 'varchar(36)', (column) => column.primaryKey())
@@ -645,6 +662,13 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .createIndex('transfer_audits_expires_at_index')
     .ifNotExists()
     .on('transfer_audits')
+    .column('expires_at')
+    .execute()
+
+  await database.schema
+    .createIndex('transfer_preview_plans_expires_at_index')
+    .ifNotExists()
+    .on('transfer_preview_plans')
     .column('expires_at')
     .execute()
 }
