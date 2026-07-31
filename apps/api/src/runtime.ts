@@ -1,9 +1,11 @@
-import { createHash, createHmac } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
+import { access, mkdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { HeadBucketCommand, S3Client, type S3ClientConfig } from '@aws-sdk/client-s3'
 import type { FastifyInstance } from 'fastify'
+import { sql } from 'kysely'
 
 import { WebAccessService } from './access/web-access-service.js'
 import { NativeAccountCredentialVault } from './accounts/native-account-credential.js'
@@ -20,6 +22,7 @@ import { PostgresNativeGrantGateway } from './accounts/postgres-native-grant-gat
 import { buildApp } from './app.js'
 import { EncryptedQueryAuditRecorder } from './audit/query-audit.js'
 import { AuthService } from './auth/auth-service.js'
+import { CachedAuthRepository } from './auth/cached-auth-repository.js'
 import { ConnectionService } from './connections/connection-service.js'
 import { TunnelDatabaseSocketProvider } from './connections/database-socket-provider.js'
 import { MysqlConnector } from './connections/mysql-connector.js'
@@ -36,6 +39,16 @@ import { DdlService } from './ddl/ddl-service.js'
 import { MysqlDdlGateway } from './ddl/mysql-ddl-gateway.js'
 import { PostgresDdlGateway } from './ddl/postgres-ddl-gateway.js'
 import { RetainedKeepAliveRecorder } from './keepalive/keepalive-event.js'
+import { RedisFallbackCircuit } from './ha/redis-fallback-circuit.js'
+import { DependencyHealthService } from './ha/dependency-health-service.js'
+import {
+  KyselyPostgresMigrationSessionProvider,
+  PostgresMigrationLock,
+} from './ha/postgres-migration-lock.js'
+import {
+  createRedisRuntimeServices,
+  type RedisRuntimeServices,
+} from './ha/redis-runtime.js'
 import { KeepAliveScheduler, SqlKeepAliveService } from './keepalive/sql-keepalive-service.js'
 import { KyselyAuthRepository } from './metadata/kysely-auth-repository.js'
 import { KyselyConnectionRepository } from './metadata/kysely-connection-repository.js'
@@ -52,6 +65,7 @@ import {
 import { KyselyTransferJobRepository } from './metadata/kysely-transfer-job-repository.js'
 import { KyselyTransferAuditRepository } from './metadata/kysely-transfer-audit-repository.js'
 import { KyselyTransferPreviewPlanRepository } from './metadata/kysely-transfer-preview-plan-repository.js'
+import { KyselyTransferWorkerLeaseRepository } from './metadata/kysely-transfer-worker-lease-repository.js'
 import { KyselyWebAccessRepository } from './metadata/kysely-web-access-repository.js'
 import {
   createMetadataDatabase,
@@ -67,6 +81,10 @@ import { SshKnownHostService } from './ssh/ssh-known-host-service.js'
 import { Ssh2TransportFactory } from './ssh/ssh2-transport-factory.js'
 import { SshTunnelPool, type SshTransportFactory } from './ssh/ssh-tunnel-pool.js'
 import { EncryptedChunkStore } from './transfers/encrypted-chunk-store.js'
+import {
+  S3EncryptedChunkStore,
+  type S3ChunkClient,
+} from './transfers/s3-encrypted-chunk-store.js'
 import { CsvTransferHandler } from './transfers/csv-transfer-handler.js'
 import { ExactCsvExportService } from './transfers/exact-csv-export-service.js'
 import { ExactCsvImportService } from './transfers/exact-csv-import-service.js'
@@ -108,12 +126,19 @@ import { loadPostgresSqlDumpData } from './transfers/postgres-sql-restore-data-l
 import { SqlRestorePreviewCoordinator } from './transfers/sql-restore-preview.js'
 import { SqlRestoreService } from './transfers/sql-restore-service.js'
 import { TransferHandlerRouter } from './transfers/transfer-handler-router.js'
+import { TransferExecutionQueue } from './transfers/transfer-execution-queue.js'
 import { type CreateTransferJobInput, TransferJobService } from './transfers/transfer-job.js'
+import {
+  TransferJobWorker,
+  TransferJobWorkerScheduler,
+} from './transfers/transfer-job-worker.js'
 import { TransferOutputWriter } from './transfers/transfer-output-writer.js'
 import { EncryptedTransferPreviewPlanStore } from './transfers/transfer-preview-plan.js'
 import { TransferPreviewService } from './transfers/transfer-preview-service.js'
 import { TransferPreviewTokenService } from './transfers/transfer-preview-token.js'
+import { TransferQueuedJobExecutor } from './transfers/transfer-queued-job-executor.js'
 import { TransferUploadService } from './transfers/transfer-upload-service.js'
+import { TransferWorkerLeaseService } from './transfers/transfer-worker-lease.js'
 
 export interface RuntimeConfig {
   host: string
@@ -124,7 +149,26 @@ export interface RuntimeConfig {
   adminUsername: string
   adminPassword: string
   transferRoot?: string
+  objectStorage?: TransferObjectStorageConfig
+  redisUrl?: string
   staticRoot?: string
+}
+
+export type TransferObjectStorageConfig =
+  | { kind: 'filesystem'; root: string }
+  | {
+    kind: 's3'
+    bucket: string
+    region: string
+    endpoint?: string
+    forcePathStyle: boolean
+    credentials?: { accessKeyId: string; secretAccessKey: string }
+    serverSideEncryption?: 'AES256' | 'aws:kms'
+    sseKmsKeyId?: string
+  }
+
+export interface S3RuntimeClient extends S3ChunkClient {
+  destroy(): void
 }
 
 export interface RuntimeDependencies {
@@ -133,6 +177,14 @@ export interface RuntimeDependencies {
     service: TransferCleanupService,
   ) => Pick<TransferCleanupScheduler, 'start' | 'stop'>
   transferAuditRecorder?: TransferAuditRecorder
+  createRedisServices?: (
+    url: string,
+    circuit: RedisFallbackCircuit,
+  ) => Promise<RedisRuntimeServices>
+  createTransferWorkerScheduler?: (
+    worker: TransferJobWorker,
+  ) => Pick<TransferJobWorkerScheduler, 'start' | 'stop' | 'wake'>
+  createS3Client?: (config: S3ClientConfig) => S3RuntimeClient
 }
 
 type RuntimeErrorCode =
@@ -140,6 +192,8 @@ type RuntimeErrorCode =
   | 'INVALID_ADMIN_PASSWORD'
   | 'INVALID_MASTER_KEY'
   | 'INVALID_METADATA_URL'
+  | 'INVALID_OBJECT_STORAGE'
+  | 'INVALID_REDIS_URL'
   | 'INVALID_PORT'
 
 export class RuntimeConfigError extends Error {
@@ -182,7 +236,9 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv | Record<string, string
   }
 
   const production = env.NODE_ENV === 'production'
+  const redisUrl = parseRedisUrl(env.DBWEB_REDIS_URL)
   const transferRoot = resolve(env.DBWEB_TRANSFER_ROOT ?? './data/transfers')
+  const objectStorage = parseObjectStorage(env, transferRoot)
   const staticRoot = env.DBWEB_WEB_ROOT
     ? resolve(env.DBWEB_WEB_ROOT)
     : production
@@ -198,7 +254,64 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv | Record<string, string
     adminUsername: env.DBWEB_ADMIN_USERNAME?.trim() || 'admin',
     adminPassword,
     transferRoot,
+    objectStorage,
+    ...(redisUrl ? { redisUrl } : {}),
     ...(staticRoot ? { staticRoot } : {}),
+  }
+}
+
+function parseObjectStorage(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>,
+  transferRoot: string,
+): TransferObjectStorageConfig {
+  const bucket = env.DBWEB_S3_BUCKET?.trim()
+  if (!bucket) return { kind: 'filesystem', root: transferRoot }
+  const region = env.DBWEB_S3_REGION?.trim()
+  if (!region || !/^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/.test(region)) {
+    throw new RuntimeConfigError('INVALID_OBJECT_STORAGE')
+  }
+  let endpoint: string | undefined
+  if (env.DBWEB_S3_ENDPOINT?.trim()) {
+    try {
+      const parsed = new URL(env.DBWEB_S3_ENDPOINT)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('protocol')
+      endpoint = parsed.toString()
+    } catch {
+      throw new RuntimeConfigError('INVALID_OBJECT_STORAGE')
+    }
+  }
+  const accessKeyId = env.DBWEB_S3_ACCESS_KEY_ID?.trim()
+  const secretAccessKey = env.DBWEB_S3_SECRET_ACCESS_KEY
+  if (Boolean(accessKeyId) !== Boolean(secretAccessKey)) {
+    throw new RuntimeConfigError('INVALID_OBJECT_STORAGE')
+  }
+  const forcePathStyleValue = env.DBWEB_S3_FORCE_PATH_STYLE?.trim().toLowerCase()
+  if (forcePathStyleValue && forcePathStyleValue !== 'true' && forcePathStyleValue !== 'false') {
+    throw new RuntimeConfigError('INVALID_OBJECT_STORAGE')
+  }
+  const rawServerSideEncryption = env.DBWEB_S3_SSE?.trim()
+  if (
+    rawServerSideEncryption
+    && rawServerSideEncryption !== 'AES256'
+    && rawServerSideEncryption !== 'aws:kms'
+  ) throw new RuntimeConfigError('INVALID_OBJECT_STORAGE')
+  const serverSideEncryption: 'AES256' | 'aws:kms' | undefined = rawServerSideEncryption === 'AES256'
+    || rawServerSideEncryption === 'aws:kms'
+    ? rawServerSideEncryption
+    : undefined
+  const sseKmsKeyId = env.DBWEB_S3_KMS_KEY_ID?.trim()
+  if (serverSideEncryption === 'aws:kms' && !sseKmsKeyId) {
+    throw new RuntimeConfigError('INVALID_OBJECT_STORAGE')
+  }
+  return {
+    kind: 's3',
+    bucket,
+    region,
+    ...(endpoint ? { endpoint } : {}),
+    forcePathStyle: forcePathStyleValue === 'true',
+    ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {}),
+    ...(serverSideEncryption ? { serverSideEncryption } : {}),
+    ...(sseKmsKeyId ? { sseKmsKeyId } : {}),
   }
 }
 
@@ -213,14 +326,40 @@ export async function buildRuntime(
   let tunnelPool: SshTunnelPool | undefined
   let nativeAccountScheduler: NativeAccountVerificationScheduler | undefined
   let transferCleanupScheduler: Pick<TransferCleanupScheduler, 'start' | 'stop'> | undefined
+  let transferWorkerScheduler: Pick<TransferJobWorkerScheduler, 'start' | 'stop' | 'wake'> | undefined
+  let redisServices: RedisRuntimeServices | undefined
+  let s3Client: S3RuntimeClient | undefined
+  const redisCircuit = config.redisUrl
+    ? new RedisFallbackCircuit({ failureThreshold: 1 })
+    : undefined
   try {
-    await migrateMetadata(database)
+    if (config.metadata.kind === 'postgres') {
+      await new PostgresMigrationLock(
+        new KyselyPostgresMigrationSessionProvider(database),
+      ).run(() => migrateMetadata(database))
+    } else {
+      await migrateMetadata(database)
+    }
     const encryption = new EnvelopeEncryption(config.masterKey)
     const securityAudit = new EncryptedSecurityAuditRecorder(
       new KyselySecurityAuditRepository(database),
       encryption,
     )
-    const authRepository = new KyselyAuthRepository(database)
+    const authAuthority = new KyselyAuthRepository(database)
+    if (config.redisUrl && redisCircuit) {
+      await redisCircuit.run(
+        async () => {
+          redisServices = await (dependencies.createRedisServices ?? createRedisRuntimeServices)(
+            config.redisUrl!,
+            redisCircuit,
+          )
+        },
+        async () => undefined,
+      )
+    }
+    const authRepository = redisServices
+      ? new CachedAuthRepository(authAuthority, redisServices.sessionCache, redisCircuit!)
+      : authAuthority
     const authService = new AuthService(authRepository, {
       idleTimeoutMs: 30 * 60_000,
       absoluteTimeoutMs: 12 * 60 * 60_000,
@@ -347,32 +486,43 @@ export async function buildRuntime(
       undefined,
       transferAudit,
     )
-    const transferRoot = config.transferRoot ?? resolve('./data/transfers')
-    const transferSourceStore = new EncryptedChunkStore({
-      root: join(transferRoot, 'source'),
-      encryption,
-      purposeNamespace: 'source',
-    })
-    const transferOutputStore = new EncryptedChunkStore({
-      root: join(transferRoot, 'output'),
-      encryption,
-      purposeNamespace: 'output',
-    })
-    const transferJsonStageStore = new EncryptedChunkStore({
-      root: join(transferRoot, 'json-stage'),
-      encryption,
-      purposeNamespace: 'json-stage',
-    })
-    const transferCsvStageStore = new EncryptedChunkStore({
-      root: join(transferRoot, 'csv-stage'),
-      encryption,
-      purposeNamespace: 'csv-stage',
-    })
-    const transferSqlStageStore = new EncryptedChunkStore({
-      root: join(transferRoot, 'sql-stage'),
-      encryption,
-      purposeNamespace: 'sql-stage',
-    })
+    const objectStorage = config.objectStorage ?? {
+      kind: 'filesystem' as const,
+      root: config.transferRoot ?? resolve('./data/transfers'),
+    }
+    if (objectStorage.kind === 'filesystem') await mkdir(objectStorage.root, { recursive: true })
+    if (objectStorage.kind === 's3') {
+      const s3Config: S3ClientConfig = {
+        region: objectStorage.region,
+        forcePathStyle: objectStorage.forcePathStyle,
+        ...(objectStorage.endpoint ? { endpoint: objectStorage.endpoint } : {}),
+        ...(objectStorage.credentials ? { credentials: objectStorage.credentials } : {}),
+      }
+      s3Client = dependencies.createS3Client?.(s3Config)
+        ?? (new S3Client(s3Config) as unknown as S3RuntimeClient)
+    }
+    const createTransferStore = (purposeNamespace: string) => objectStorage.kind === 's3'
+      ? new S3EncryptedChunkStore({
+        client: s3Client!,
+        bucket: objectStorage.bucket,
+        prefix: 'dbweb/transfers',
+        purposeNamespace,
+        encryption,
+        ...(objectStorage.serverSideEncryption
+          ? { serverSideEncryption: objectStorage.serverSideEncryption }
+          : {}),
+        ...(objectStorage.sseKmsKeyId ? { sseKmsKeyId: objectStorage.sseKmsKeyId } : {}),
+      })
+      : new EncryptedChunkStore({
+        root: join(objectStorage.root, purposeNamespace),
+        encryption,
+        purposeNamespace,
+      })
+    const transferSourceStore = createTransferStore('source')
+    const transferOutputStore = createTransferStore('output')
+    const transferJsonStageStore = createTransferStore('json-stage')
+    const transferCsvStageStore = createTransferStore('csv-stage')
+    const transferSqlStageStore = createTransferStore('sql-stage')
     const transferUploadService = new TransferUploadService(
       transferJobService,
       transferSourceStore,
@@ -656,6 +806,18 @@ export async function buildRuntime(
       transferPreviewPlans,
       transferAudit,
     )
+    const transferExecutionQueue = new TransferExecutionQueue(
+      transferJobService,
+      transferPreviewPlans,
+      redisServices?.transferWake ?? { notify: async () => undefined },
+    )
+    const transferWorker = new TransferJobWorker(
+      randomUUID(),
+      new TransferWorkerLeaseService(new KyselyTransferWorkerLeaseRepository(database)),
+      new TransferQueuedJobExecutor(authAuthority, transferPreviewPlans, transferHandlers),
+    )
+    transferWorkerScheduler = dependencies.createTransferWorkerScheduler?.(transferWorker)
+      ?? new TransferJobWorkerScheduler(transferWorker)
     const transferCleanupService = new TransferCleanupService(
       transferJobRepository,
       [transferSourceStore, transferOutputStore, transferJsonStageStore, transferCsvStageStore, transferSqlStageStore],
@@ -673,6 +835,17 @@ export async function buildRuntime(
     const csrfSecret = createHmac('sha256', config.masterKey)
       .update('dbweb-csrf-v1')
       .digest()
+    const healthService = new DependencyHealthService({
+      metadata: async () => {
+        await database.selectNoFrom(sql<number>`1`.as('ok')).executeTakeFirstOrThrow()
+      },
+      objectStorage: objectStorage.kind === 's3'
+        ? async () => {
+          await s3Client!.send(new HeadBucketCommand({ Bucket: objectStorage.bucket }))
+        }
+        : async () => { await access(objectStorage.root) },
+      ...(redisCircuit ? { redisState: () => redisCircuit.status().state } : {}),
+    })
     const app = await buildApp({
       authService,
       connectionService,
@@ -687,6 +860,8 @@ export async function buildRuntime(
       transferDownloadService,
       transferPreviewService,
       transferExecutionService: transferHandlers,
+      transferExecutionQueue,
+      healthService,
       sshKnownHostService: knownHosts,
       webAccessService,
       csrfSecret,
@@ -696,20 +871,44 @@ export async function buildRuntime(
     keepAliveScheduler.start()
     nativeAccountScheduler.start()
     transferCleanupScheduler.start()
+    transferWorkerScheduler.start()
+    await redisServices?.transferWake.start(() => transferWorkerScheduler?.wake())
     app.addHook('onClose', async () => {
+      await redisServices?.transferWake.close()
+      await transferWorkerScheduler?.stop()
       await transferCleanupScheduler?.stop()
       await nativeAccountScheduler?.stop()
       await keepAliveScheduler.stop()
       await tunnelPool?.close()
+      await redisServices?.close()
+      s3Client?.destroy()
       await database.destroy()
     })
     return app
   } catch (error) {
+    await redisServices?.transferWake.close()
+    await transferWorkerScheduler?.stop()
     await transferCleanupScheduler?.stop()
     await nativeAccountScheduler?.stop()
     await tunnelPool?.close()
+    await redisServices?.close()
+    s3Client?.destroy()
     await database.destroy()
     throw error
+  }
+}
+
+function parseRedisUrl(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'redis:' && url.protocol !== 'rediss:') {
+      throw new RuntimeConfigError('INVALID_REDIS_URL')
+    }
+    return url.toString()
+  } catch (error) {
+    if (error instanceof RuntimeConfigError) throw error
+    throw new RuntimeConfigError('INVALID_REDIS_URL')
   }
 }
 

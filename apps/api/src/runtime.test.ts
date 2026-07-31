@@ -2,12 +2,19 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
+import { HeadBucketCommand } from '@aws-sdk/client-s3'
 import { describe, expect, it, vi } from 'vitest'
 
 import { AuthService } from './auth/auth-service.js'
+import { MemorySessionCache } from './auth/cached-auth-repository.js'
 import { KyselyAuthRepository } from './metadata/kysely-auth-repository.js'
 import { createMetadataDatabase, migrateMetadata } from './metadata/metadata-database.js'
-import { buildRuntime, loadRuntimeConfig, RuntimeConfigError } from './runtime.js'
+import {
+  buildRuntime,
+  loadRuntimeConfig,
+  RuntimeConfigError,
+  type S3RuntimeClient,
+} from './runtime.js'
 import type { SshKnownHostService } from './ssh/ssh-known-host-service.js'
 import type { SshTransportFactory } from './ssh/ssh-tunnel-pool.js'
 import type { TransferCleanupService } from './transfers/transfer-cleanup-service.js'
@@ -49,7 +56,141 @@ describe('runtime', () => {
     expect(loadRuntimeConfig(base).transferRoot).toBe(resolve('./data/transfers'))
     expect(loadRuntimeConfig({ ...base, DBWEB_TRANSFER_ROOT: './custom-transfers' }).transferRoot)
       .toBe(resolve('./custom-transfers'))
+    expect(loadRuntimeConfig({ ...base, DBWEB_REDIS_URL: 'redis://cache.internal:6379' }).redisUrl)
+      .toBe('redis://cache.internal:6379')
+    expect(() => loadRuntimeConfig({ ...base, DBWEB_REDIS_URL: 'https://invalid.test' }))
+      .toThrow(new RuntimeConfigError('INVALID_REDIS_URL'))
   })
+
+  it('驗證S3/MinIO object storage設定且未配置時保留filesystem', () => {
+    const base = {
+      DBWEB_MASTER_KEY: Buffer.alloc(32, 3).toString('base64'),
+      DBWEB_ADMIN_PASSWORD: 'long-enough-password',
+    }
+    expect(loadRuntimeConfig(base).objectStorage).toEqual({
+      kind: 'filesystem',
+      root: resolve('./data/transfers'),
+    })
+    expect(loadRuntimeConfig({
+      ...base,
+      DBWEB_S3_BUCKET: 'dbweb-transfers',
+      DBWEB_S3_REGION: 'us-east-1',
+      DBWEB_S3_ENDPOINT: 'http://minio:9000',
+      DBWEB_S3_FORCE_PATH_STYLE: 'true',
+      DBWEB_S3_ACCESS_KEY_ID: 'dbweb-access',
+      DBWEB_S3_SECRET_ACCESS_KEY: 'dbweb-secret',
+      DBWEB_S3_SSE: 'AES256',
+    }).objectStorage).toEqual({
+      kind: 's3',
+      bucket: 'dbweb-transfers',
+      region: 'us-east-1',
+      endpoint: 'http://minio:9000/',
+      forcePathStyle: true,
+      credentials: { accessKeyId: 'dbweb-access', secretAccessKey: 'dbweb-secret' },
+      serverSideEncryption: 'AES256',
+    })
+    expect(() => loadRuntimeConfig({ ...base, DBWEB_S3_BUCKET: 'bucket' }))
+      .toThrow(new RuntimeConfigError('INVALID_OBJECT_STORAGE'))
+    expect(() => loadRuntimeConfig({
+      ...base,
+      DBWEB_S3_BUCKET: 'bucket',
+      DBWEB_S3_REGION: 'us-east-1',
+      DBWEB_S3_ACCESS_KEY_ID: 'only-access',
+    })).toThrow(new RuntimeConfigError('INVALID_OBJECT_STORAGE'))
+  })
+
+  it('設定Redis時組裝PG權威session cache並在關閉時釋放client', async () => {
+    const cache = new MemorySessionCache()
+    const cacheSet = vi.spyOn(cache, 'set')
+    const closeRedis = vi.fn(async () => undefined)
+    let redisWakeListener: (() => void) | undefined
+    const redisWake = vi.fn()
+    const createRedisServices = vi.fn(async () => ({
+      sessionCache: cache,
+      transferWake: {
+        close: vi.fn(async () => undefined),
+        notify: vi.fn(async () => undefined),
+        start: vi.fn(async (listener: () => void) => { redisWakeListener = listener }),
+      },
+      close: closeRedis,
+    }))
+    const workerStart = vi.fn()
+    const workerStop = vi.fn(async () => undefined)
+    const createTransferWorkerScheduler = vi.fn(() => ({
+      start: workerStart,
+      stop: workerStop,
+      wake: redisWake,
+    }))
+    const app = await buildRuntime({
+      host: '127.0.0.1',
+      port: 3000,
+      production: false,
+      metadata: { kind: 'sqlite', filename: ':memory:' },
+      redisUrl: 'redis://cache.internal:6379',
+      masterKey: Buffer.alloc(32, 12),
+      adminUsername: 'admin',
+      adminPassword: 'bootstrap-admin-password',
+    }, { createRedisServices, createTransferWorkerScheduler })
+
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'admin', password: 'bootstrap-admin-password' },
+    })
+    await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { cookie: login.headers['set-cookie'] as string },
+    })
+
+    expect(createRedisServices).toHaveBeenCalledWith(
+      'redis://cache.internal:6379',
+      expect.anything(),
+    )
+    expect(createTransferWorkerScheduler).toHaveBeenCalledOnce()
+    expect(workerStart).toHaveBeenCalledOnce()
+    redisWakeListener?.()
+    expect(redisWake).toHaveBeenCalledOnce()
+    expect(cacheSet).toHaveBeenCalled()
+    await app.close()
+    expect(workerStop).toHaveBeenCalledOnce()
+    expect(closeRedis).toHaveBeenCalledOnce()
+  }, 20_000)
+
+  it('S3模式以HeadBucket作readiness並在關閉時釋放client', async () => {
+    const send = vi.fn(async (command: unknown) => {
+      if (command instanceof HeadBucketCommand) return {}
+      throw new Error('unexpected-s3-command')
+    })
+    const destroy = vi.fn()
+    const createS3Client = vi.fn(() => ({ send, destroy } as S3RuntimeClient))
+    const app = await buildRuntime({
+      host: '127.0.0.1',
+      port: 3000,
+      production: false,
+      metadata: { kind: 'sqlite', filename: ':memory:' },
+      objectStorage: {
+        kind: 's3',
+        bucket: 'dbweb-transfers',
+        region: 'us-east-1',
+        endpoint: 'http://minio:9000/',
+        forcePathStyle: true,
+      },
+      masterKey: Buffer.alloc(32, 14),
+      adminUsername: 'admin',
+      adminPassword: 'bootstrap-admin-password',
+    }, { createS3Client })
+
+    expect((await app.inject({ method: 'GET', url: '/api/health/ready' })).statusCode).toBe(200)
+    expect(createS3Client).toHaveBeenCalledWith(expect.objectContaining({
+      region: 'us-east-1',
+      endpoint: 'http://minio:9000/',
+      forcePathStyle: true,
+    }))
+    expect(send).toHaveBeenCalledWith(expect.any(HeadBucketCommand))
+    await app.close()
+    expect(destroy).toHaveBeenCalledOnce()
+  }, 20_000)
 
   it('組裝 SQLite runtime、bootstrap 管理員，重開後可登入且不重複建立', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dbweb-runtime-'))
