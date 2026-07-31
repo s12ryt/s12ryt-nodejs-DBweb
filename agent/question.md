@@ -150,3 +150,45 @@
 - M4安全稽核記錄登入重新驗證、密碼查看、Web權限變更、帳號建立/納管/輪替/停用/刪除/復原、GRANT/REVOKE、背景驗證及成功/失敗狀態，保存 365 天。密碼永不寫入稽核、錯誤或一般API；SQL template依既有AES-GCM與憑證遮蔽邊界加密保存。
 - 敏感帳號操作維持登入、CSRF、即時能力檢查、限速與安全錯誤；driver訊息、密碼hash、加密密文及DB/SSH秘密不得洩漏。管理員密碼重新驗證不得建立新的長效提升權限，只授權單次密碼查看。
 - 完成條件沿用 PostgreSQL 9.6/17、MySQL 5.6/8.4 真實整合矩陣；Chromium、Firefox、WebKit E2E涵蓋Web授權即時生效，以及原生帳號建立、納管輪替、查看、停用、刪除/復原與grant/revoke核心流程。Docker build、單元/整合測試、lint、strict typecheck及production build必須全綠。
+
+## 第五里程碑匯入匯出契約
+
+### 範圍與格式
+
+- M5 拆為連續交付的 M5A 工作與安全檔案基礎、M5B CSV/JSON、M5C 純 Node.js SQL dump/restore 與完整驗收；拆分只調整實作順序，不縮減本節範圍。
+- CSV 只處理單一資料表；JSON 可封裝多個資料表；SQL dump 可選單表、schema 或整個既有 connection database。SQL dump 只允許同引擎 restore，PostgreSQL 與 MySQL 不互相轉換；CSV/JSON 可透過欄位映射跨引擎匯入既有表。
+- CSV/JSON 同時提供精確可攜模式與人類友善模式。精確模式使用既有 tagged values，無損保存 bigint、decimal、date、time、datetime、timestamptz、binary、json、array、NULL 與空字串；友善模式將特殊型別輸出為可讀字串並標記 lossy，只供匯出閱讀，不接受重新匯入。
+- CSV 使用 UTF-8、必要 header、雙引號 quote，支援逗號、tab 或分號 delimiter，自動辨識換行，能辨識與輸出 BOM。友善 CSV 預設防試算表公式注入：以 `=`、`+`、`-`、`@` 或控制前綴開頭的文字加單引號並標記處理；使用者可選高風險原始模式。精確 CSV 保持原值並警告不得直接以試算表開啟。
+- 精確 JSON 使用 manifest 加 NDJSON records；每筆標記 table 與 tagged row，適合串流與重新掃描。精確 CSV sidecar、JSON manifest 與 SQL dump 多段內容統一使用路徑固定的安全 tar 容器，可選 gzip；拒絕絕對路徑、路徑穿越、hard/symbolic link、重複條目、超出宣告大小與解壓縮炸彈。友善單表檔可直接下載，gzip 預設關閉但可選。
+- 純 Node.js SQL dump 採 DBWeb 專用 manifest/package，只 restore 經版本、engine、條目大小與 checksum 驗證的 DBWeb package，不把任意上傳 SQL 當 dump 執行，也不宣稱與 `pg_dump`/`mysqldump` 等價。
+
+### SQL dump 物件與還原
+
+- dump 涵蓋表、欄位、資料、identity/auto increment、PK/UNIQUE/FK/CHECK、常見索引，以及 M3C 全部進階物件：PostgreSQL view/materialized view/sequence/type/domain/enum/function/procedure/trigger/partition/extension；MySQL view/procedure/function/trigger/event/partition。排除 M4 帳號/grants及主機/叢集級物件。
+- restore 只能寫入既有 connection/database；可建立 schema、table 與 package 內物件，但不建立 database。預設遇到既有物件即停止；可選 drop-and-recreate，preview 必須列出所有將刪除的物件與資料估算，操作者輸入目標 database 名稱後一次確認不可變 restore plan，不提供自動 schema merge。
+- manifest 保存物件相依圖；restore 先建立 schema/type/table，再載入資料，最後建立索引、延後的循環 FK、view、routine、trigger 等相依物件，不關閉全域 FK 檢查。遇到缺 extension、權限或版本不支援物件時預設停止；可明確選擇略過，且所有依賴該物件的後續項目一併略過並報告。
+- 精確 restore 預設保留 identity/auto increment 值；PostgreSQL 同步 sequence，MySQL 調整後續 AUTO_INCREMENT。computed/generated 欄永遠不可寫。友善 CSV/JSON 不可匯入；精確 CSV/JSON 預設忽略 identity，但可明確選擇保留。
+
+### 資料選取、映射與衝突
+
+- 匯出可選全表或結構化安全 filter；支援 `eq/ne/lt/lte/gt/gte/is-null/is-not-null/in/between/like` 且只允許 AND。值全部參數化，IN 最多 100 個值，不接受任意 WHERE SQL或自訂 LIKE escape。JSON/dump 可逐表選擇是否包含資料。
+- CSV/JSON 匯入預設依來源名稱與方言識別字規則自動映射，可在 preview UI 逐欄覆寫。來源缺欄位時依序使用 DEFAULT 或 NULL，兩者皆不可時驗證失敗；多餘來源欄位必須明確選擇忽略，不得靜默丟棄。
+- 衝突策略提供略過、更新、取代，預設略過。更新只依主鍵或已驗證穩定非空唯一鍵；取代採同一交易內刪除後新增，可能觸發 FK/trigger或改變 identity，必須二次確認。禁止依不穩定列位置更新或取代。
+- 匯入可選整檔原子或批次提交。批次大小預設 1,000、範圍 100 至 10,000；每批單一交易，首個失敗批次 rollback並停止，已提交批次保留。失敗或程序重啟後可從檔頭重新掃描續傳，續傳一律略過已存在穩定鍵，不重做原本的更新或取代；整檔原子模式重啟後只能重新開始。
+- 取消會立即 abort driver與stream；目前交易/batch rollback，先前已提交批次保留。job 標為 cancelled，暫存檔 24 小時後刪除；cancelled job 不可續傳，只能建立新 job。
+
+### Job、檔案與安全
+
+- 上傳採固定 8 MiB chunks，每段與整檔均驗 checksum；可查詢已接收 chunks並從中斷處續傳。單檔或單 job 上限 10 GB；每位使用者最多 2 個執行中 job，每個 connection最多2個。所有 parser、匯入、匯出、壓縮與下載必須串流處理，不得整檔載入記憶體。
+- 單機暫存檔放在 runtime data 目錄，使用環境主密鑰及 job/segment用途綁定分段加密；完成或取消後保留24小時，失敗 job 檔案保留7天供重新掃描續傳。M6多實例再替換為共享 object storage，不在 M5 提前擴張部署架構。
+- job 狀態固定為 queued、previewed、running、succeeded、failed、cancelled，顯示 bytes、rows、tables、已提交批次及遮蔽錯誤摘要。建立者可查看、取消與下載自己的 job；管理員可管理全部 job，但下載時仍須具備該 connection 的即時讀能力並寫 audit。
+- 執行前強制 preview：驗證package/header/manifest、checksum、mapping、型別、目標能力與schema，估算rows/bytes並列前100筆錯誤。preview token 在檔案checksum、mapping、策略、目標、能力或目標schema fingerprint改變，或超過30分鐘時失效，必須重新preview後才能確認執行。
+- preview與執行最多保存前1,000筆row/object錯誤及總數；API可分頁查看，只保存行號、欄位、錯誤碼與遮蔽摘要，不保存原始敏感列。完成輸出可在24小時內經授權下載；job metadata保存90天。
+- 建立、preview、確認、取消、續傳、下載與最終結果寫入90天匯入匯出audit；稽核永不保存原始資料、檔案內容、密碼或解密暫存，SQL/物件摘要依既有AES-GCM邊界保存。
+
+### 一致性、授權與驗收
+
+- 匯出使用一致性快照：PostgreSQL採 REPEATABLE READ READ ONLY；MySQL在版本能力可用時採 consistent snapshot/read-only transaction。整個job看到同一資料快照；UI提示長交易可能增加資料庫保留與負載。
+- 匯出CSV/JSON資料需要 `data-read`；含結構的SQL dump需要 `structure-read`，若包含資料另需 `data-read`；CSV/JSON匯入需要 `data-write`；SQL restore同時需要 `ddl-write`與`data-write`。所有能力在建立、preview、執行、續傳、取消與下載等敏感邊界逐請求即時檢查，管理員維持全權。
+- M5 UI提供雙語job中心、建立匯出、分段上傳、preview、欄位映射、策略與交易模式、確認、進度、取消、續傳及授權下載。固定尺寸與響應式控制不得在桌面/手機重疊。
+- 自動驗收在PostgreSQL 9.6/17與MySQL 5.6/8.4驗證CSV、精確多表JSON、M3C進階SQL dump round-trip、三種衝突策略、批次partial與整檔rollback、identity及相依排序。Chromium/Firefox/WebKit E2E涵蓋job核心流程；Docker image、完整unit/integration、lint、strict typecheck與production build必須全綠。
