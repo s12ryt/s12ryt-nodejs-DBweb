@@ -10,7 +10,10 @@ import {
   type DdlGateway,
 } from './ddl-service.js'
 
-async function setup(engine: 'postgres' | 'mysql' = 'postgres') {
+async function setup(
+  engine: 'postgres' | 'mysql' = 'postgres',
+  authorize?: (actor: { id: string; role: 'admin' | 'user' }, connectionId: string) => Promise<boolean>,
+) {
   const connector = { test: vi.fn(async () => ({ latencyMs: 1, serverVersion: 'unused' })) }
   const connections = new ConnectionService(
     new MemoryConnectionRepository(),
@@ -28,7 +31,13 @@ async function setup(engine: 'postgres' | 'mysql' = 'postgres') {
   }
   const audit: DdlAuditRecorder = { record: vi.fn(async () => undefined) }
   return {
-    service: new DdlService(connections, { postgres: gateway, mysql: gateway }, audit),
+    service: new DdlService(
+      connections,
+      { postgres: gateway, mysql: gateway },
+      audit,
+      undefined,
+      authorize,
+    ),
     profile,
     gateway,
     audit,
@@ -80,6 +89,25 @@ describe('DdlService', () => {
       sqlTemplates: ['CREATE TABLE "public"."orders" ("id" bigint NOT NULL)'],
     }))
     expect(JSON.stringify(vi.mocked(audit.record).mock.calls[0]?.[0])).not.toContain('database-secret')
+  })
+
+  it('注入的即時授權允許具ddl-write能力的一般使用者', async () => {
+    const authorize = vi.fn(async () => true)
+    const { service, profile, gateway } = await setup('postgres', authorize)
+
+    await service.execute({ id: 'designer-1', role: 'user' }, {
+      connectionId: profile.id,
+      command: {
+        kind: 'create-table', schema: 'public', name: 'reports',
+        columns: [{ name: 'id', type: { name: 'bigint' }, nullable: false }],
+      },
+    })
+
+    expect(authorize).toHaveBeenCalledWith(
+      { id: 'designer-1', role: 'user' },
+      profile.id,
+    )
+    expect(gateway.execute).toHaveBeenCalledOnce()
   })
 
   it('將PostgreSQL database DDL標示為非交易', async () => {

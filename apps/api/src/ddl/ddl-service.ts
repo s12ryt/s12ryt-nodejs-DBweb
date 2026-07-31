@@ -34,6 +34,11 @@ export interface DdlAuditRecorder {
   record(entry: DdlAuditEntry): Promise<void>
 }
 
+export type DdlAuthorizer = (
+  actor: { id: string; role: 'admin' | 'user' },
+  connectionId: string,
+) => Promise<boolean>
+
 export type DdlServiceErrorCode = 'DDL_FAILED' | 'FORBIDDEN'
 
 export class DdlServiceError extends Error {
@@ -49,13 +54,14 @@ export class DdlService {
     private readonly gateways: Record<DatabaseEngine, DdlGateway>,
     private readonly audit: DdlAuditRecorder,
     private readonly now: () => Date = () => new Date(),
+    private readonly authorize: DdlAuthorizer = async (actor) => actor.role === 'admin',
   ) {}
 
   async capabilities(
     actor: { id: string; role: 'admin' | 'user' },
     connectionId: string,
   ): Promise<DdlCapabilities> {
-    this.requireAdmin(actor)
+    await this.requireAuthorized(actor, connectionId)
     const connection = await this.connections.resolveConnection(connectionId)
     try {
       const version = await this.gateways[connection.engine].serverVersion(connection)
@@ -69,7 +75,7 @@ export class DdlService {
     actor: { id: string; role: 'admin' | 'user' },
     input: { connectionId: string; command: DdlCommand },
   ): Promise<{ statementsExecuted: number; transactional: boolean }> {
-    this.requireAdmin(actor)
+    await this.requireAuthorized(actor, input.connectionId)
     const connection = await this.connections.resolveConnection(input.connectionId)
     let capabilities: DdlCapabilities
     try {
@@ -92,8 +98,13 @@ export class DdlService {
     }
   }
 
-  private requireAdmin(actor: { role: 'admin' | 'user' }): void {
-    if (actor.role !== 'admin') throw new DdlServiceError('FORBIDDEN')
+  private async requireAuthorized(
+    actor: { id: string; role: 'admin' | 'user' },
+    connectionId: string,
+  ): Promise<void> {
+    if (!(await this.authorize(actor, connectionId))) {
+      throw new DdlServiceError('FORBIDDEN')
+    }
   }
 
   private async record(
