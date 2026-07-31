@@ -126,6 +126,13 @@ describe('MySQL SQL dump snapshot', () => {
 
     expect(snapshot.manifest.objects).toEqual(expect.arrayContaining([
       expect.objectContaining({
+        id: 'table:app.orders',
+        createCommands: [expect.objectContaining({
+          kind: 'create-table',
+          columns: [expect.objectContaining({ name: 'amount', type: { name: 'int' } })],
+        })],
+      }),
+      expect.objectContaining({
         id: 'constraint:app.orders.orders_amount_check',
         createCommands: [expect.objectContaining({
           kind: 'add-constraint',
@@ -133,6 +140,47 @@ describe('MySQL SQL dump snapshot', () => {
         })],
       }),
     ]))
+  })
+
+  it('uses conservative view dependencies on MySQL 5.6 without VIEW_TABLE_USAGE', async () => {
+    const queries: string[] = []
+    const client: MysqlSqlDumpConnection = {
+      query: vi.fn((sql: string, values: unknown[] | ((error?: Error, rows?: unknown) => void), callback?: (error?: Error, rows?: unknown) => void) => {
+        queries.push(sql)
+        const done = typeof values === 'function' ? values : callback
+        if (!done) return undefined
+        if (sql === 'SELECT VERSION() AS dbweb_version') done(undefined, [{ dbweb_version: '5.6.51' }])
+        else if (sql.includes('dbweb_table_schema')) done(undefined, [{
+          dbweb_table_schema: 'app', dbweb_table_name: 'orders', dbweb_engine: 'InnoDB',
+          dbweb_collation: 'utf8mb4_unicode_ci', dbweb_charset: 'utf8mb4',
+        }])
+        else if (sql.includes('dbweb_data_type')) done(undefined, [{
+          dbweb_column_name: 'id', dbweb_data_type: 'bigint', dbweb_column_type: 'bigint',
+          dbweb_nullable: 'NO', dbweb_default: null, dbweb_extra: '',
+        }])
+        else if (sql.includes('dbweb_view_name')) done(undefined, [{
+          dbweb_view_schema: 'app', dbweb_view_name: 'active_orders',
+          dbweb_view_definition: 'select `orders`.`id` AS `id` from `orders`',
+          dbweb_dependencies: null,
+        }])
+        else done(undefined, [])
+        return undefined
+      }),
+      end: vi.fn((callback) => callback()),
+      destroy: vi.fn(),
+    }
+    const catalog = new SqlDumpSnapshotCatalog(new MysqlSqlDumpSnapshotSessionFactory(
+      vi.fn().mockResolvedValue(client),
+      vi.fn(() => Readable.from([], { objectMode: true })),
+    ))
+
+    const snapshot = await catalog.withSnapshot(connection, {
+      compression: 'none', scope: { kind: 'database' }, includeData: false,
+    }, new AbortController().signal, async (value) => value)
+
+    expect(queries.some((sql) => /view_table_usage/i.test(sql))).toBe(false)
+    expect(snapshot.manifest.objects.find((object) => object.id === 'view:app.active_orders')?.dependencies)
+      .toEqual(['table:app.orders'])
   })
 
   it('exports structured MySQL views, routines, triggers, events, and partitions', async () => {
@@ -221,7 +269,7 @@ describe('MySQL SQL dump snapshot', () => {
     }))
     expect(snapshot.manifest.objects.find((object) => object.id === 'function:app.constant_value')?.createCommands[0])
       .toEqual(expect.objectContaining({
-        kind: 'create-routine', routineKind: 'function', returns: { name: 'integer' },
+         kind: 'create-routine', routineKind: 'function', returns: { name: 'int' },
         deterministic: true, dataAccess: 'no-sql', security: 'invoker', body: 'RETURN 7', confirmed: true,
       }))
     expect(snapshot.manifest.objects.find((object) => object.id === 'procedure:app.refresh_orders')?.createCommands[0])

@@ -105,7 +105,11 @@ class MysqlSqlDumpSnapshotSession implements SqlDumpSnapshotSession {
       definitions.push(await this.describeTable(table, serverVersionTuple))
     }
     const tableObjects = definitions.flatMap((table) => buildSqlDumpTableObjects(table, plan.includeData))
-    const viewObjects = await this.describeViews(plan.scope)
+    const viewObjects = await this.describeViews(
+      plan.scope,
+      serverVersionTuple,
+      definitions.map((table) => tableObjectId(table.schema, table.name)),
+    )
     const routineObjects = await this.describeRoutines(plan.scope)
     const triggerObjects = await this.describeTriggers(plan.scope)
     const eventObjects = await this.describeEvents(plan.scope)
@@ -199,9 +203,22 @@ class MysqlSqlDumpSnapshotSession implements SqlDumpSnapshotSession {
     }
   }
 
-  private async describeViews(scope: SqlDumpScope): Promise<SqlDumpObject[]> {
+  private async describeViews(
+    scope: SqlDumpScope,
+    serverVersion: readonly [number, number, number],
+    tableIds: string[],
+  ): Promise<SqlDumpObject[]> {
     if (scope.kind === 'table') return []
     const database = scope.kind === 'database' ? this.connection.database : scope.schema
+    if (!versionAtLeast(serverVersion, [8, 0, 0])) {
+      const rows = asRows(await query(this.client,
+        `SELECT table_schema AS dbweb_view_schema, table_name AS dbweb_view_name,
+                view_definition AS dbweb_view_definition, NULL AS dbweb_dependencies
+         FROM information_schema.views
+         WHERE table_schema = ?
+         ORDER BY table_name`, [database]))
+      return rows.map((row) => ({ ...mapViewObject(row), dependencies: [...tableIds] }))
+    }
     const rows = asRows(await query(this.client,
       `SELECT v.table_schema AS dbweb_view_schema, v.table_name AS dbweb_view_name,
               v.view_definition AS dbweb_view_definition,
@@ -392,7 +409,8 @@ function mapColumnType(dataType: string, columnType: string): DdlColumnType {
   const length = /\((\d+)\)/.exec(columnType)?.[1]
   const numeric = /^(?:decimal|numeric)\((\d+),(\d+)\)/i.exec(columnType)
   if (dataType === 'bigint') return { name: 'bigint' }
-  if (['tinyint', 'smallint', 'mediumint', 'int', 'integer'].includes(dataType)) return { name: 'integer' }
+  if (dataType === 'integer') return { name: 'int' }
+  if (['tinyint', 'smallint', 'mediumint', 'int'].includes(dataType)) return { name: dataType }
   if (dataType === 'float') return { name: 'float' }
   if (dataType === 'double') return { name: 'double' }
   if (dataType === 'decimal' || dataType === 'numeric') return { name: 'decimal', ...(numeric ? { precision: Number(numeric[1]), scale: Number(numeric[2]) } : {}) }
