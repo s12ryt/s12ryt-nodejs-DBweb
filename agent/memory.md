@@ -85,3 +85,7 @@
 - 新增exact CSV/JSON真實roundtrip integration，從PG/MySQL一致性快照串流到用途隔離的加密staging/output，解析gzip tar後以正式方言gateway匯入並查回資料；workflow已納入PG9.6/17與MySQL5.6/8.4，待遠端驗證。
 - exact CSV/JSON切片以8筆English plain原子提交推送；GitHub Actions run `30640147483` 的quality、Docker、三瀏覽器及PG9.6/17、MySQL5.6/8.4全部通過。四個資料庫job均實際執行exact CSV與多表JSON gzip package roundtrip，因此M5B完成並進入M5C。
 - 本切片本機驗證為99個Vitest檔通過、4個integration檔略過，389 tests通過、12 cases略過；ESLint、workspace strict typecheck、production build及Playwright 7 passed/2 responsive skipped全綠。
+- M5C restore核心以7筆原子提交推送後，GitHub Actions run `30642817243` 的quality、Docker、三瀏覽器及PG9.6/17、MySQL5.6/8.4全綠；該切片涵蓋manifest、依賴plan、package、restore preview/service、方言session與target catalog。
+- 依RED -> GREEN完成SQL restore同session data loader：exact tagged NDJSON欄位/DDL重驗、bigint/decimal/NULL、PG sequence及MySQL AUTO_INCREMENT同步；PG失敗rollback進度0，MySQL保留已套用step。active restore cancel會abort並等待rollback/close，不只改job狀態。
+- 完成SQL dump staging package writer、snapshot catalog與export service；lazy entry在同一唯讀snapshot中完整消費。PG核心表snapshot支援9.6 serial與10+ identity，MySQL支援AUTO_INCREMENT、FK及8.0.16+ enforced CHECK。
+- 完成SQL export/restore preview、handler router、runtime與HTTP安全映射；restore driver訊息不外洩，MySQL只回appliedSteps/failedStep。完整本機回歸為114 files、435 tests通過，lint/typecheck/build及Playwright 7 passed/2 skipped全綠；進階物件catalog、Web UI及四版本進階roundtrip仍待完成。
