@@ -80,3 +80,4 @@
 - 2026-07-31：精確 JSON 匯入已完成 PostgreSQL/MySQL 方言 gateway；atomic 失敗全數 rollback，batch 只保留已提交進度，skip/update/replace、generated identity與 PostgreSQL sequence同步皆由測試保護。preview會重驗來源manifest、target schema、能力與checksum。
 - 2026-07-31：transfer handler依伺服器端job direction/format分派friendly CSV export、exact JSON export/import；不支援組合不會fallback，但仍可取消以釋放active配額。source/output/json-stage使用不同AAD namespace並納入retention cleanup。
 - 2026-07-31：本切片完整本機驗證為95個Vitest檔通過、3個integration檔略過，377 tests通過、10個無本機DB cases略過；lint、strict typecheck、production build及Playwright 7 passed/2 responsive skipped全綠。精確CSV executor與四版本roundtrip仍待完成。
+- 2026-07-31：精確 JSON 與 friendly CSV 切片以18筆原子提交推送；GitHub Actions run `30637137877` 的 quality、Docker image、browser、PostgreSQL 9.6/17 與 MySQL 5.6/8.4 既有矩陣全部通過。資料庫 jobs 尚未納入 transfer roundtrip，因此精確 CSV 與四版本 CSV/JSON roundtrip 仍是 M5B 驗收缺口。

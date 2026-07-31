@@ -80,3 +80,4 @@
 - 完成PG/MySQL精確JSON import gateway與SQL builder：所有值參數化，skip/update/replace、DEFAULT、generated identity、PG sequence同步、atomic rollback與batch partial progress都有RED/GREEN證據。
 - 完成server-side transfer handler router與runtime組裝，preview、execute、cancel只依metadata job方向/格式分派；unsupported execute回安全422且不fallback，unsupported queued job仍能取消釋放配額。
 - 本切片完整本機回歸：Vitest 95 files通過、3 integration files略過，377 tests通過、10 cases略過；ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases依設定略過。精確CSV executor及四版本roundtrip仍在M5B待辦。
+- friendly CSV 與精確 JSON 切片以18筆English plain原子提交推送main；GitHub Actions run `30637137877` 的quality、Docker、三瀏覽器與PG9.6/17、MySQL5.6/8.4既有integration jobs全部通過。該run尚未執行transfer roundtrip，不能取代後續CSV/JSON四版本驗收。
