@@ -709,7 +709,7 @@ function parseMysqlEnum(columnType: string): string[] {
 function valueTypeForColumn(column: DdlColumnDefinition): DatabaseValueType {
   const name = column.type.name.toLowerCase()
   if (name === 'bigint') return 'bigint'
-  if (['integer', 'float', 'double'].includes(name)) return 'number'
+  if (['tinyint', 'smallint', 'mediumint', 'int', 'integer', 'float', 'double'].includes(name)) return 'number'
   if (name === 'decimal' || name === 'numeric') return 'decimal'
   if (name === 'date') return 'date'
   if (name === 'time') return 'time'

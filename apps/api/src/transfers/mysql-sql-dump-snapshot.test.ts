@@ -45,6 +45,7 @@ describe('MySQL SQL dump snapshot', () => {
           { dbweb_column_name: 'id', dbweb_data_type: 'bigint', dbweb_column_type: 'bigint(20)', dbweb_nullable: 'NO', dbweb_default: null, dbweb_extra: 'auto_increment' },
           { dbweb_column_name: 'code', dbweb_data_type: 'varchar', dbweb_column_type: 'varchar(32)', dbweb_nullable: 'NO', dbweb_default: null, dbweb_extra: '' },
           { dbweb_column_name: 'parent_id', dbweb_data_type: 'bigint', dbweb_column_type: 'bigint(20)', dbweb_nullable: 'YES', dbweb_default: null, dbweb_extra: '' },
+          { dbweb_column_name: 'counter', dbweb_data_type: 'int', dbweb_column_type: 'int(11)', dbweb_nullable: 'NO', dbweb_default: '0', dbweb_extra: '' },
         ])
         else done(undefined, [])
         return undefined
@@ -54,7 +55,7 @@ describe('MySQL SQL dump snapshot', () => {
     }
     const factory = new MysqlSqlDumpSnapshotSessionFactory(
       vi.fn().mockResolvedValue(client),
-      vi.fn(() => Readable.from([{ id: '1', code: '', parent_id: null }], { objectMode: true })),
+      vi.fn(() => Readable.from([{ id: '1', code: '', parent_id: null, counter: 2 }], { objectMode: true })),
     )
     const catalog = new SqlDumpSnapshotCatalog(factory)
 
@@ -77,12 +78,14 @@ describe('MySQL SQL dump snapshot', () => {
         expect.objectContaining({ name: 'id', type: { name: 'bigint' }, identity: true }),
         expect.objectContaining({ name: 'code', type: { name: 'varchar', length: 32 } }),
         expect.objectContaining({ name: 'parent_id', type: { name: 'bigint' }, nullable: true }),
+        expect.objectContaining({ name: 'counter', type: { name: 'int' } }),
       ],
     }))
     expect(snapshot.records).toEqual([{ kind: 'row', table: 'table:app.orders', values: {
       id: { kind: 'value', type: 'bigint', value: '1' },
       code: { kind: 'value', type: 'string', value: '' },
       parent_id: { kind: 'null' },
+      counter: { kind: 'value', type: 'number', value: 2 },
     } }])
     expect(queries.slice(0, 2)).toEqual([
       'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ',
