@@ -103,7 +103,10 @@ describe('authentication HTTP API', () => {
       payload: { username: 'operator', password: 'valid operator password', role: 'user' },
     })
     expect(created.statusCode).toBe(201)
-    expect(created.json()).toMatchObject({ username: 'operator', role: 'user' })
+    expect(created.json()).toMatchObject({
+      user: { username: 'operator', role: 'user', passwordChangeRequired: true },
+      temporaryPassword: 'valid operator password',
+    })
     expect(created.json()).not.toHaveProperty('passwordHash')
   })
 
@@ -152,5 +155,158 @@ describe('authentication HTTP API', () => {
       payload: { username: 'admin', password: 'incorrect password' },
     })
     expect(blocked.statusCode).toBe(429)
+  })
+
+  it('管理員可建立臨時密碼使用者、列出帳號並停用後立即撤銷其session', async () => {
+    const app = await createApp()
+    const adminLogin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'admin', password: 'correct horse battery staple' },
+    })
+    const adminHeaders = {
+      cookie: adminLogin.headers['set-cookie'] as string,
+      'x-csrf-token': adminLogin.json<{ csrfToken: string }>().csrfToken,
+    }
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/users',
+      headers: adminHeaders,
+      payload: { username: 'operator', role: 'user' },
+    })
+
+    expect(created.statusCode).toBe(201)
+    expect(created.json()).toMatchObject({
+      user: { username: 'operator', enabled: true, passwordChangeRequired: true },
+      temporaryPassword: expect.stringMatching(/^[A-Za-z0-9_-]{20}$/),
+    })
+    const temporaryPassword = created.json<{ temporaryPassword: string }>().temporaryPassword
+    const operatorLogin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'operator', password: temporaryPassword },
+    })
+    expect(operatorLogin.statusCode).toBe(200)
+
+    const users = await app.inject({ method: 'GET', url: '/api/users', headers: adminHeaders })
+    const operator = users.json<Array<{ id: string; username: string }>>().find(
+      (user) => user.username === 'operator',
+    )
+    expect(users.statusCode).toBe(200)
+    expect(operator).toBeDefined()
+
+    const disabled = await app.inject({
+      method: 'PATCH',
+      url: `/api/users/${operator?.id}`,
+      headers: adminHeaders,
+      payload: { enabled: false },
+    })
+    expect(disabled.statusCode).toBe(200)
+    expect(disabled.json()).toMatchObject({ enabled: false })
+
+    const revoked = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { cookie: operatorLogin.headers['set-cookie'] as string },
+    })
+    expect(revoked.statusCode).toBe(401)
+  })
+
+  it('強制改密碼帳號只能先變更本人密碼，變更後舊session失效', async () => {
+    const admin = await authService.login('admin', 'correct horse battery staple')
+    const operator = await authService.createUser({
+      username: 'operator',
+      password: 'operator password 123',
+      role: 'user',
+    })
+    const reset = await authService.resetUserPassword(admin.user, operator.id, 'temporary password 123')
+    expect(reset.user.passwordChangeRequired).toBe(true)
+    const app = await createApp()
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'operator', password: 'temporary password 123' },
+    })
+    const headers = {
+      cookie: login.headers['set-cookie'] as string,
+      'x-csrf-token': login.json<{ csrfToken: string }>().csrfToken,
+    }
+
+    const blocked = await app.inject({ method: 'GET', url: '/api/users', headers })
+    expect(blocked.statusCode).toBe(403)
+    expect(blocked.json()).toMatchObject({ error: { code: 'PASSWORD_CHANGE_REQUIRED' } })
+
+    const changed = await app.inject({
+      method: 'POST',
+      url: '/api/auth/change-password',
+      headers,
+      payload: { currentPassword: 'temporary password 123', newPassword: 'new operator password 456' },
+    })
+    expect(changed.statusCode).toBe(204)
+
+    const oldSession = await app.inject({ method: 'GET', url: '/api/auth/me', headers })
+    expect(oldSession.statusCode).toBe(401)
+    const newLogin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'operator', password: 'new operator password 456' },
+    })
+    expect(newLogin.statusCode).toBe(200)
+    expect(newLogin.json()).toMatchObject({ user: { passwordChangeRequired: false } })
+  })
+
+  it('管理員可重設、升降角色及確認刪除，但不能移除最後一位可用管理員', async () => {
+    const app = await createApp()
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'admin', password: 'correct horse battery staple' },
+    })
+    const headers = {
+      cookie: login.headers['set-cookie'] as string,
+      'x-csrf-token': login.json<{ csrfToken: string }>().csrfToken,
+    }
+    const listed = await app.inject({ method: 'GET', url: '/api/users', headers })
+    const admin = listed.json<Array<{ id: string }>>()[0]
+
+    const protectedDelete = await app.inject({
+      method: 'DELETE',
+      url: `/api/users/${admin?.id}`,
+      headers,
+      payload: { confirmed: true },
+    })
+    expect(protectedDelete.statusCode).toBe(409)
+    expect(protectedDelete.json()).toMatchObject({ error: { code: 'LAST_ENABLED_ADMIN' } })
+
+    const created = await authService.createUser({
+      username: 'operator',
+      password: 'operator password 123',
+      role: 'user',
+    })
+    const promoted = await app.inject({
+      method: 'PATCH',
+      url: `/api/users/${created.id}`,
+      headers,
+      payload: { role: 'admin' },
+    })
+    expect(promoted.statusCode).toBe(200)
+    expect(promoted.json()).toMatchObject({ role: 'admin' })
+
+    const reset = await app.inject({
+      method: 'POST',
+      url: `/api/users/${created.id}/reset-password`,
+      headers,
+      payload: {},
+    })
+    expect(reset.statusCode).toBe(200)
+    expect(reset.json()).toMatchObject({ temporaryPassword: expect.stringMatching(/^[A-Za-z0-9_-]{20}$/) })
+
+    const deleted = await app.inject({
+      method: 'DELETE',
+      url: `/api/users/${created.id}`,
+      headers,
+      payload: { confirmed: true },
+    })
+    expect(deleted.statusCode).toBe(204)
   })
 })

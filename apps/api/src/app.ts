@@ -6,6 +6,7 @@ import rateLimit from '@fastify/rate-limit'
 import staticFiles from '@fastify/static'
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify'
 
+import { type WebCapability, type WebAccessService } from './access/web-access-service.js'
 import { AuthError, type AuthService } from './auth/auth-service.js'
 import type { AuthUser, UserRole } from './auth/auth-types.js'
 import { ConnectionError, type ConnectionService } from './connections/connection-service.js'
@@ -34,6 +35,7 @@ interface BuildAppOptions {
   ddlService?: DdlService
   queryService?: SqlQueryService
   sshKnownHostService?: SshKnownHostService
+  webAccessService?: WebAccessService
   csrfSecret: Buffer
   production: boolean
   staticRoot?: string
@@ -44,7 +46,9 @@ interface LoginBody {
   password: string
 }
 
-interface CreateUserBody extends LoginBody {
+interface CreateUserBody {
+  username: string
+  password?: string
   role: UserRole
 }
 
@@ -76,17 +80,21 @@ const messages = {
     INVALID_CSRF: 'Invalid CSRF token',
     INVALID_MUTATION: 'Invalid data mutation',
     INVALID_SESSION: 'Authentication required',
+    LAST_ENABLED_ADMIN: 'At least one enabled administrator is required',
+    PASSWORD_CHANGE_REQUIRED: 'Password change required',
     SESSION_EXPIRED: 'Session expired',
     QUERY_CANCELLED: 'Query cancelled',
     QUERY_FAILED: 'Query execution failed',
     QUERY_NOT_ACTIVE: 'Query is not active',
     QUERY_TIMEOUT: 'Query timed out',
+    READ_ONLY_QUERY_REQUIRED: 'Only a single read-only SQL statement is allowed',
     MUTATION_FAILED: 'Data mutation failed',
     ROW_CONFLICT: 'The row changed or no longer exists',
     TABLE_WITHOUT_STABLE_KEY: 'Table has no stable unique key',
     UNSUPPORTED_COLUMN: 'Column cannot be modified',
     UNAUTHORIZED: 'Authentication required',
     USERNAME_TAKEN: 'Username is already in use',
+    USER_NOT_FOUND: 'User not found',
     WEAK_PASSWORD: 'Password must contain at least 12 characters',
   },
   'zh-TW': {
@@ -114,17 +122,21 @@ const messages = {
     INVALID_CSRF: 'CSRF 驗證失敗',
     INVALID_MUTATION: '資料異動內容無效',
     INVALID_SESSION: '需要登入',
+    LAST_ENABLED_ADMIN: '至少需要保留一位已啟用的管理員',
+    PASSWORD_CHANGE_REQUIRED: '必須先變更密碼',
     SESSION_EXPIRED: '登入階段已過期',
     QUERY_CANCELLED: '查詢已取消',
     QUERY_FAILED: '查詢執行失敗',
     QUERY_NOT_ACTIVE: '查詢未在執行中',
     QUERY_TIMEOUT: '查詢逾時',
+    READ_ONLY_QUERY_REQUIRED: '只允許單一唯讀 SQL 語句',
     MUTATION_FAILED: '資料異動失敗',
     ROW_CONFLICT: '資料列已變更或不存在',
     TABLE_WITHOUT_STABLE_KEY: '資料表沒有穩定的唯一鍵',
     UNSUPPORTED_COLUMN: '欄位不可修改',
     UNAUTHORIZED: '需要登入',
     USERNAME_TAKEN: '使用者名稱已被使用',
+    USER_NOT_FOUND: '找不到使用者',
     WEAK_PASSWORD: '密碼至少需要 12 個字元',
   },
 } as const
@@ -144,6 +156,21 @@ function sendError(
   return reply.code(statusCode).send({
     error: { code, message: messages[localeOf(request)][code] },
   })
+}
+
+function handleUserLifecycleError(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  error: unknown,
+) {
+  if (!(error instanceof AuthError)) throw error
+  if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+  if (error.code === 'LAST_ENABLED_ADMIN') {
+    return sendError(request, reply, 409, 'LAST_ENABLED_ADMIN')
+  }
+  if (error.code === 'USER_NOT_FOUND') return sendError(request, reply, 404, 'USER_NOT_FOUND')
+  if (error.code === 'WEAK_PASSWORD') return sendError(request, reply, 422, 'WEAK_PASSWORD')
+  throw error
 }
 
 function csrfTokenFor(sessionToken: string, secret: Buffer): string {
@@ -176,6 +203,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   async function authenticate(
     request: FastifyRequest,
     reply: FastifyReply,
+    allowPasswordChange = false,
   ): Promise<AuthUser | undefined> {
     const token = request.cookies[SESSION_COOKIE]
     if (!token) {
@@ -184,7 +212,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
 
     try {
-      return await options.authService.authenticate(token)
+      const user = await options.authService.authenticate(token)
+      if (user.passwordChangeRequired && !allowPasswordChange) {
+        sendError(request, reply, 403, 'PASSWORD_CHANGE_REQUIRED')
+        return undefined
+      }
+      return user
     } catch (error) {
       if (error instanceof AuthError) {
         const code = error.code === 'SESSION_EXPIRED' ? 'SESSION_EXPIRED' : 'INVALID_SESSION'
@@ -251,7 +284,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   )
 
   app.get('/api/auth/me', async (request, reply) => {
-    const user = await authenticate(request, reply)
+    const user = await authenticate(request, reply, true)
     if (!user) return
     const token = request.cookies[SESSION_COOKIE]
     return {
@@ -261,7 +294,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   })
 
   app.post('/api/auth/logout', async (request, reply) => {
-    const user = await authenticate(request, reply)
+    const user = await authenticate(request, reply, true)
     if (!user || !validateCsrf(request, reply)) return
     const token = request.cookies[SESSION_COOKIE]
     if (token) await options.authService.logout(token)
@@ -276,7 +309,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         body: {
           type: 'object',
           additionalProperties: false,
-          required: ['username', 'password', 'role'],
+          required: ['username', 'role'],
           properties: {
             username: { type: 'string', minLength: 1, maxLength: 128 },
             password: { type: 'string', minLength: 1, maxLength: 1024 },
@@ -291,8 +324,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
 
       try {
-        const user = await options.authService.createUser(request.body)
-        return reply.code(201).send(user)
+        const result = await options.authService.createManagedUser(actor, request.body)
+        return reply.code(201).send(result)
       } catch (error) {
         if (error instanceof AuthError && (error.code === 'USERNAME_TAKEN' || error.code === 'WEAK_PASSWORD')) {
           return sendError(request, reply, 409, error.code)
@@ -302,13 +335,258 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     },
   )
 
+  const userIdParamsSchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['userId'],
+    properties: { userId: { type: 'string', minLength: 1, maxLength: 128 } },
+  } as const
+
+  app.get('/api/users', async (request, reply) => {
+    const actor = await authenticate(request, reply)
+    if (!actor) return
+    try {
+      return await options.authService.listUsers(actor)
+    } catch (error) {
+      if (error instanceof AuthError && error.code === 'FORBIDDEN') {
+        return sendError(request, reply, 403, 'FORBIDDEN')
+      }
+      throw error
+    }
+  })
+
+  app.patch<{
+    Params: { userId: string }
+    Body: { enabled?: boolean; role?: UserRole }
+  }>(
+    '/api/users/:userId',
+    {
+      schema: {
+        params: userIdParamsSchema,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          minProperties: 1,
+          maxProperties: 1,
+          properties: {
+            enabled: { type: 'boolean' },
+            role: { type: 'string', enum: ['admin', 'user'] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const actor = await authenticate(request, reply)
+      if (!actor || !validateCsrf(request, reply)) return
+      try {
+        if (request.body.enabled !== undefined) {
+          return await options.authService.setUserEnabled(actor, request.params.userId, request.body.enabled)
+        }
+        return await options.authService.setUserRole(
+          actor,
+          request.params.userId,
+          request.body.role as UserRole,
+        )
+      } catch (error) {
+        return handleUserLifecycleError(request, reply, error)
+      }
+    },
+  )
+
+  app.post<{
+    Params: { userId: string }
+    Body: { password?: string }
+  }>(
+    '/api/users/:userId/reset-password',
+    {
+      schema: {
+        params: userIdParamsSchema,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { password: { type: 'string', minLength: 1, maxLength: 1024 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const actor = await authenticate(request, reply)
+      if (!actor || !validateCsrf(request, reply)) return
+      try {
+        return await options.authService.resetUserPassword(
+          actor,
+          request.params.userId,
+          request.body.password,
+        )
+      } catch (error) {
+        return handleUserLifecycleError(request, reply, error)
+      }
+    },
+  )
+
+  app.delete<{
+    Params: { userId: string }
+    Body: { confirmed: boolean }
+  }>(
+    '/api/users/:userId',
+    {
+      schema: {
+        params: userIdParamsSchema,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['confirmed'],
+          properties: { confirmed: { const: true } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const actor = await authenticate(request, reply)
+      if (!actor || !validateCsrf(request, reply)) return
+      try {
+        await options.authService.deleteUser(actor, request.params.userId)
+        return reply.code(204).send()
+      } catch (error) {
+        return handleUserLifecycleError(request, reply, error)
+      }
+    },
+  )
+
+  app.post<{ Body: { currentPassword: string; newPassword: string } }>(
+    '/api/auth/change-password',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['currentPassword', 'newPassword'],
+          properties: {
+            currentPassword: { type: 'string', minLength: 1, maxLength: 1024 },
+            newPassword: { type: 'string', minLength: 1, maxLength: 1024 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const actor = await authenticate(request, reply, true)
+      if (!actor || !validateCsrf(request, reply)) return
+      try {
+        await options.authService.changeOwnPassword(
+          actor,
+          request.body.currentPassword,
+          request.body.newPassword,
+        )
+        return reply.code(204).send()
+      } catch (error) {
+        if (error instanceof AuthError && error.code === 'INVALID_CREDENTIALS') {
+          return sendError(request, reply, 401, 'INVALID_CREDENTIALS')
+        }
+        if (error instanceof AuthError && error.code === 'WEAK_PASSWORD') {
+          return sendError(request, reply, 422, 'WEAK_PASSWORD')
+        }
+        throw error
+      }
+    },
+  )
+
+  if (options.webAccessService) {
+    const accessService = options.webAccessService
+    const accessParamsSchema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['userId', 'connectionId'],
+      properties: {
+        userId: { type: 'string', minLength: 1, maxLength: 128 },
+        connectionId: { type: 'string', minLength: 1, maxLength: 128 },
+      },
+    } as const
+    const capabilityValues: WebCapability[] = [
+      'structure-read',
+      'data-read',
+      'query-read',
+      'data-write',
+      'ddl-write',
+      'account-manage',
+    ]
+
+    app.get<{ Params: { userId: string } }>(
+      '/api/users/:userId/access',
+      {
+        schema: {
+          params: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['userId'],
+            properties: { userId: { type: 'string', minLength: 1, maxLength: 128 } },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor) return
+        if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
+        return accessService.listAssignments(actor, request.params.userId)
+      },
+    )
+
+    app.put<{
+      Params: { userId: string; connectionId: string }
+      Body: { capabilities?: WebCapability[] }
+    }>(
+      '/api/users/:userId/connections/:connectionId/access',
+      {
+        schema: {
+          params: accessParamsSchema,
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              capabilities: {
+                type: 'array',
+                uniqueItems: true,
+                items: { type: 'string', enum: capabilityValues },
+              },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor || !validateCsrf(request, reply)) return
+        if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
+        return accessService.assign(
+          actor,
+          request.params.userId,
+          request.params.connectionId,
+          request.body.capabilities,
+        )
+      },
+    )
+
+    app.delete<{ Params: { userId: string; connectionId: string } }>(
+      '/api/users/:userId/connections/:connectionId/access',
+      { schema: { params: accessParamsSchema } },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor || !validateCsrf(request, reply)) return
+        if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
+        await accessService.revoke(actor, request.params.userId, request.params.connectionId)
+        return reply.code(204).send()
+      },
+    )
+  }
+
   if (options.connectionService) {
     const connectionService = options.connectionService
 
     app.get('/api/connections', async (request, reply) => {
       const user = await authenticate(request, reply)
       if (!user) return
-      return connectionService.list()
+      const profiles = await connectionService.list()
+      if (!options.webAccessService) return profiles
+      const visibleIds = await options.webAccessService.listVisibleConnectionIds(user)
+      if (!visibleIds) return profiles
+      const visible = new Set(visibleIds)
+      return profiles.filter((profile) => visible.has(profile.id))
     })
 
     app.post<{ Body: ConnectionInput }>(
@@ -470,10 +748,18 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     async function browse(
       request: FastifyRequest,
       reply: FastifyReply,
+      connectionId: string,
+      capability: Extract<WebCapability, 'structure-read' | 'data-read'>,
       action: () => Promise<unknown>,
     ) {
       const user = await authenticate(request, reply)
       if (!user) return
+      if (
+        options.webAccessService
+        && !(await options.webAccessService.can(user, connectionId, capability))
+      ) {
+        return sendError(request, reply, 403, 'FORBIDDEN')
+      }
       try {
         return await action()
       } catch (error) {
@@ -493,21 +779,33 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     app.get<{ Params: { id: string } }>(
       '/api/connections/:id/schemas',
       { schema: { params: idParamsSchema } },
-      async (request, reply) => browse(request, reply, () => explorer.listSchemas(request.params.id)),
+      async (request, reply) => browse(
+        request,
+        reply,
+        request.params.id,
+        'structure-read',
+        () => explorer.listSchemas(request.params.id),
+      ),
     )
 
     app.get<{ Params: { id: string; schema: string } }>(
       '/api/connections/:id/schemas/:schema/tables',
       { schema: { params: schemaParamsSchema } },
       async (request, reply) =>
-        browse(request, reply, () => explorer.listTables(request.params.id, request.params.schema)),
+        browse(
+          request,
+          reply,
+          request.params.id,
+          'structure-read',
+          () => explorer.listTables(request.params.id, request.params.schema),
+        ),
     )
 
     app.get<{ Params: { id: string; schema: string; table: string } }>(
       '/api/connections/:id/schemas/:schema/tables/:table/columns',
       { schema: { params: tableParamsSchema } },
       async (request, reply) =>
-        browse(request, reply, () =>
+        browse(request, reply, request.params.id, 'structure-read', () =>
           explorer.describeTable(request.params.id, request.params.schema, request.params.table),
         ),
     )
@@ -531,7 +829,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         },
       },
       async (request, reply) =>
-        browse(request, reply, () =>
+        browse(request, reply, request.params.id, 'data-read', () =>
           explorer.readRows(
             request.params.id,
             request.params.schema,
@@ -569,8 +867,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       async (request, reply) => {
         const user = await authenticate(request, reply)
         if (!user || !validateCsrf(request, reply)) return
+        if (
+          options.webAccessService
+          && !(await options.webAccessService.can(user, request.body.connectionId, 'query-read'))
+        ) {
+          return sendError(request, reply, 403, 'FORBIDDEN')
+        }
         try {
-          return await queryService.execute(user.id, request.body)
+          return options.webAccessService
+            ? await queryService.execute(user.id, request.body, { readOnly: user.role !== 'admin' })
+            : await queryService.execute(user.id, request.body)
         } catch (error) {
           if (error instanceof ConnectionError) {
             return sendError(request, reply, 404, error.code)
@@ -581,6 +887,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
               INVALID_QUERY: 422,
               QUERY_CANCELLED: 409,
               QUERY_FAILED: 502,
+              READ_ONLY_QUERY_REQUIRED: 422,
               QUERY_TIMEOUT: 408,
             }[error.code]
             return sendError(request, reply, statusCode, error.code)
@@ -633,11 +940,15 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     async function handleMutation(
       request: FastifyRequest,
       reply: FastifyReply,
+      connectionId: string,
       action: (actor: AuthUser) => Promise<unknown>,
     ) {
       const actor = await authenticate(request, reply)
       if (!actor) return
-      if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
+      const allowed = options.webAccessService
+        ? await options.webAccessService.can(actor, connectionId, 'data-write')
+        : actor.role === 'admin'
+      if (!allowed) return sendError(request, reply, 403, 'FORBIDDEN')
       try {
         return await action(actor)
       } catch (error) {
@@ -678,11 +989,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     app.get<{ Params: MutationParams }>(
       mutationUrl,
       { schema: { params: mutationParamsSchema } },
-      async (request, reply) => handleMutation(request, reply, (actor) => mutationService.inspect(actor, {
-        connectionId: request.params.id,
-        schema: request.params.schema,
-        table: request.params.table,
-      })),
+      async (request, reply) => handleMutation(
+        request,
+        reply,
+        request.params.id,
+        (actor) => mutationService.inspect(actor, {
+          connectionId: request.params.id,
+          schema: request.params.schema,
+          table: request.params.table,
+        }),
+      ),
     )
 
     app.post<{ Params: MutationParams; Body: Pick<DataMutationRequest, 'operations'> }>(
@@ -708,8 +1024,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       async (request, reply) => {
         const actor = await authenticate(request, reply)
         if (!actor || !validateCsrf(request, reply)) return
-        if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
-        return handleMutation(request, reply, () => mutationService.mutate(actor, {
+        return handleMutation(request, reply, request.params.id, () => mutationService.mutate(actor, {
           connectionId: request.params.id,
           schema: request.params.schema,
           table: request.params.table,
@@ -747,11 +1062,15 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     async function handleDdl(
       request: FastifyRequest,
       reply: FastifyReply,
+      connectionId: string,
       action: (actor: AuthUser) => Promise<unknown>,
     ) {
       const actor = await authenticate(request, reply)
       if (!actor) return
-      if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
+      const allowed = options.webAccessService
+        ? await options.webAccessService.can(actor, connectionId, 'ddl-write')
+        : actor.role === 'admin'
+      if (!allowed) return sendError(request, reply, 403, 'FORBIDDEN')
       try {
         return await action(actor)
       } catch (error) {
@@ -779,6 +1098,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       async (request, reply) => handleDdl(
         request,
         reply,
+        request.params.id,
         (actor) => ddlService.capabilities(actor, request.params.id),
       ),
     )
@@ -806,8 +1126,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       async (request, reply) => {
         const actor = await authenticate(request, reply)
         if (!actor || !validateCsrf(request, reply)) return
-        if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
-        return handleDdl(request, reply, () => ddlService.execute(actor, {
+        return handleDdl(request, reply, request.params.id, () => ddlService.execute(actor, {
           connectionId: request.params.id,
           command: request.body.command,
         }))
