@@ -8,12 +8,15 @@ import type { FastifyInstance } from 'fastify'
 import { WebAccessService } from './access/web-access-service.js'
 import { NativeAccountCredentialVault } from './accounts/native-account-credential.js'
 import { MysqlNativeAccountGateway } from './accounts/mysql-native-account-gateway.js'
+import { MysqlNativeGrantGateway } from './accounts/mysql-native-grant-gateway.js'
 import { NativeAccountService } from './accounts/native-account-service.js'
+import { NativeGrantService } from './accounts/native-grant-service.js'
 import {
   NativeAccountVerificationScheduler,
   NativeAccountVerifier,
 } from './accounts/native-account-verifier.js'
 import { PostgresNativeAccountGateway } from './accounts/postgres-native-account-gateway.js'
+import { PostgresNativeGrantGateway } from './accounts/postgres-native-grant-gateway.js'
 import { buildApp } from './app.js'
 import { EncryptedQueryAuditRecorder } from './audit/query-audit.js'
 import { AuthService } from './auth/auth-service.js'
@@ -255,6 +258,16 @@ export async function buildRuntime(
       (actorId, password) => authService.verifyOwnPassword(actorId, password),
       securityAudit,
     )
+    const nativeGrantService = new NativeGrantService(
+      connectionService,
+      nativeAccountGateways,
+      {
+        postgres: new PostgresNativeGrantGateway(undefined, socketProvider),
+        mysql: new MysqlNativeGrantGateway(undefined, socketProvider),
+      },
+      (actor, connectionId) => webAccessService.can(actor, connectionId, 'account-manage'),
+      securityAudit,
+    )
     const nativeAccountVerifier = new NativeAccountVerifier(
       connectionService,
       nativeAccountGateways,
@@ -281,6 +294,7 @@ export async function buildRuntime(
       ddlService,
       queryService,
       nativeAccountService,
+      nativeGrantService,
       sshKnownHostService: knownHosts,
       webAccessService,
       csrfSecret,

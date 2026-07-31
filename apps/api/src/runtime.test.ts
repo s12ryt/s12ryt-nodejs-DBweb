@@ -137,6 +137,10 @@ describe('runtime', () => {
       method: 'GET',
       url: '/api/connections/c1/accounts',
     })).statusCode).toBe(401)
+    expect((await app.inject({
+      method: 'GET',
+      url: '/api/connections/c1/accounts/grants?targetDatabase=app&engine=postgres&username=reader',
+    })).statusCode).toBe(401)
     await expect(app.close()).resolves.toBeUndefined()
   }, 20_000)
 })
