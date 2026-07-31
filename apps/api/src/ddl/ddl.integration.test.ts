@@ -84,6 +84,85 @@ describe.runIf(engine === 'postgres')('PostgreSQL DDL integration', () => {
       await postgresQuery('DROP TABLE IF EXISTS dbweb_ddl_test')
     }
   }, 30_000)
+
+  it('manages supported advanced and programmable objects', async () => {
+    const capabilities = await liveCapabilities(gateway)
+    await cleanupPostgresAdvancedObjects(capabilities)
+    try {
+      await postgresQuery('CREATE TABLE dbweb_advanced_source (id integer NOT NULL, code text NOT NULL)')
+      await postgresQuery("CREATE FUNCTION dbweb_trigger_function() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.code := upper(NEW.code); RETURN NEW; END; $$")
+
+      await run(gateway, capabilities, {
+        kind: 'create-view', schema, name: 'dbweb_advanced_view',
+        query: 'SELECT id, code FROM public.dbweb_advanced_source', confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-materialized-view', schema, name: 'dbweb_advanced_materialized',
+        query: 'SELECT count(*) AS total FROM public.dbweb_advanced_source', withData: true, confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'refresh-materialized-view', schema, name: 'dbweb_advanced_materialized', confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-sequence', schema, name: 'dbweb_advanced_sequence', start: 10, increment: 2,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-enum', schema, name: 'dbweb_advanced_state', values: ['new', 'done'],
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-domain', schema, name: 'dbweb_positive_integer', baseType: { name: 'integer' },
+        nullable: false, check: 'VALUE > 0', confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-routine', routineKind: 'function', schema, name: 'dbweb_mask_value',
+        arguments: [{ name: 'input', type: { name: 'text' } }], returns: { name: 'text' },
+        language: 'sql', body: "SELECT 'masked'::text", confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-trigger', schema, table: 'dbweb_advanced_source', name: 'dbweb_advanced_trigger',
+        timing: 'before', events: ['insert'], forEach: 'row',
+        functionSchema: schema, functionName: 'dbweb_trigger_function', confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-extension', name: 'pgcrypto', confirmed: true,
+      })
+
+      if (capabilities.advanced.procedure) {
+        await run(gateway, capabilities, {
+          kind: 'create-routine', routineKind: 'procedure', schema, name: 'dbweb_noop_procedure',
+          arguments: [], language: 'plpgsql', body: 'BEGIN NULL; END;', confirmed: true,
+        })
+      }
+      if (capabilities.advanced.partition) {
+        await postgresQuery('CREATE TABLE dbweb_partitioned_events (id integer NOT NULL) PARTITION BY RANGE (id)')
+        await run(gateway, capabilities, {
+          kind: 'create-partition', schema, table: 'dbweb_partitioned_events', name: 'dbweb_events_low',
+          definition: 'FOR VALUES FROM (0) TO (100)', confirmed: true,
+        })
+      }
+
+      expect(await postgresQuery("SELECT table_name FROM information_schema.views WHERE table_schema = 'public' AND table_name = 'dbweb_advanced_view'"))
+        .toEqual([{ table_name: 'dbweb_advanced_view' }])
+      expect(await postgresQuery("SELECT matviewname FROM pg_matviews WHERE schemaname = 'public' AND matviewname = 'dbweb_advanced_materialized'"))
+        .toEqual([{ matviewname: 'dbweb_advanced_materialized' }])
+      expect(await postgresQuery("SELECT routine_name FROM information_schema.routines WHERE routine_schema = 'public' AND routine_name = 'dbweb_mask_value'"))
+        .toEqual([{ routine_name: 'dbweb_mask_value' }])
+      expect(await postgresQuery("SELECT trigger_name FROM information_schema.triggers WHERE trigger_schema = 'public' AND trigger_name = 'dbweb_advanced_trigger'"))
+        .toEqual([{ trigger_name: 'dbweb_advanced_trigger' }])
+      expect(await postgresQuery("SELECT extname FROM pg_extension WHERE extname = 'pgcrypto'"))
+        .toEqual([{ extname: 'pgcrypto' }])
+      if (capabilities.advanced.procedure) {
+        expect(await postgresQuery("SELECT routine_name FROM information_schema.routines WHERE routine_schema = 'public' AND routine_name = 'dbweb_noop_procedure'"))
+          .toEqual([{ routine_name: 'dbweb_noop_procedure' }])
+      }
+      if (capabilities.advanced.partition) {
+        expect(await postgresQuery("SELECT to_regclass('public.dbweb_events_low') AS relation"))
+          .toEqual([{ relation: 'dbweb_events_low' }])
+      }
+    } finally {
+      await cleanupPostgresAdvancedObjects(capabilities)
+    }
+  }, 60_000)
 })
 
 describe.runIf(engine === 'mysql')('MySQL DDL integration', () => {
@@ -135,6 +214,54 @@ describe.runIf(engine === 'mysql')('MySQL DDL integration', () => {
       await mysqlQuery('DROP TABLE IF EXISTS dbweb_ddl_test')
     }
   }, 30_000)
+
+  it('manages supported advanced and programmable objects', async () => {
+    const capabilities = await liveCapabilities(gateway)
+    await cleanupMysqlAdvancedObjects()
+    try {
+      await mysqlQuery('CREATE TABLE dbweb_advanced_source (id int NOT NULL PRIMARY KEY, code varchar(50) NOT NULL, marker varchar(50) NULL) ENGINE=InnoDB')
+      await mysqlQuery('CREATE TABLE dbweb_partitioned_events (id int NOT NULL) ENGINE=InnoDB PARTITION BY RANGE (id) (PARTITION dbweb_events_base VALUES LESS THAN (100))')
+
+      await run(gateway, capabilities, {
+        kind: 'create-view', schema: database, name: 'dbweb_advanced_view',
+        query: `SELECT id, code FROM \`${database}\`.\`dbweb_advanced_source\``, confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-routine', routineKind: 'function', schema: database, name: 'dbweb_constant_value',
+        arguments: [], returns: { name: 'int' }, body: 'RETURN 7', confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-routine', routineKind: 'procedure', schema: database, name: 'dbweb_noop_procedure',
+        arguments: [], body: 'SELECT 1', confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-trigger', schema: database, table: 'dbweb_advanced_source', name: 'dbweb_advanced_trigger',
+        timing: 'before', events: ['insert'], forEach: 'row', body: 'SET NEW.marker = UPPER(NEW.code)', confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-event', schema: database, name: 'dbweb_advanced_event',
+        schedule: { kind: 'every', amount: 1, unit: 'day' }, preserve: true, enabled: false,
+        body: 'DELETE FROM dbweb_advanced_source WHERE id < 0', confirmed: true,
+      })
+      await run(gateway, capabilities, {
+        kind: 'create-partition', schema: database, table: 'dbweb_partitioned_events', name: 'dbweb_events_high',
+        definition: 'VALUES LESS THAN (200)', confirmed: true,
+      })
+
+      expect(await mysqlQuery("SELECT TABLE_NAME AS dbweb_name FROM information_schema.views WHERE table_schema = DATABASE() AND table_name = 'dbweb_advanced_view'"))
+        .toEqual([{ dbweb_name: 'dbweb_advanced_view' }])
+      expect(await mysqlQuery("SELECT ROUTINE_NAME AS dbweb_name FROM information_schema.routines WHERE routine_schema = DATABASE() AND routine_name IN ('dbweb_constant_value', 'dbweb_noop_procedure') ORDER BY routine_name"))
+        .toEqual([{ dbweb_name: 'dbweb_constant_value' }, { dbweb_name: 'dbweb_noop_procedure' }])
+      expect(await mysqlQuery("SELECT TRIGGER_NAME AS dbweb_name FROM information_schema.triggers WHERE trigger_schema = DATABASE() AND trigger_name = 'dbweb_advanced_trigger'"))
+        .toEqual([{ dbweb_name: 'dbweb_advanced_trigger' }])
+      expect(await mysqlQuery("SELECT EVENT_NAME AS dbweb_name FROM information_schema.events WHERE event_schema = DATABASE() AND event_name = 'dbweb_advanced_event'"))
+        .toEqual([{ dbweb_name: 'dbweb_advanced_event' }])
+      expect(await mysqlQuery("SELECT DISTINCT PARTITION_NAME AS dbweb_name FROM information_schema.partitions WHERE table_schema = DATABASE() AND table_name = 'dbweb_partitioned_events' AND partition_name = 'dbweb_events_high'"))
+        .toEqual([{ dbweb_name: 'dbweb_events_high' }])
+    } finally {
+      await cleanupMysqlAdvancedObjects()
+    }
+  }, 60_000)
 })
 
 async function liveCapabilities(gateway: DdlGateway): Promise<DdlCapabilities> {
@@ -160,4 +287,34 @@ async function mysqlQuery(sql: string): Promise<Array<Record<string, unknown>>> 
     const [rows] = await client.query(sql)
     return Array.isArray(rows) ? rows as Array<Record<string, unknown>> : []
   } finally { await client.end() }
+}
+
+async function cleanupPostgresAdvancedObjects(capabilities: DdlCapabilities): Promise<void> {
+  const statements = [
+    'DROP TABLE IF EXISTS dbweb_partitioned_events CASCADE',
+    'DROP TABLE IF EXISTS dbweb_advanced_source CASCADE',
+    'DROP MATERIALIZED VIEW IF EXISTS dbweb_advanced_materialized CASCADE',
+    'DROP VIEW IF EXISTS dbweb_advanced_view CASCADE',
+    ...(capabilities.advanced.procedure ? ['DROP PROCEDURE IF EXISTS dbweb_noop_procedure()'] : []),
+    'DROP FUNCTION IF EXISTS dbweb_mask_value(text)',
+    'DROP FUNCTION IF EXISTS dbweb_trigger_function()',
+    'DROP DOMAIN IF EXISTS dbweb_positive_integer CASCADE',
+    'DROP TYPE IF EXISTS dbweb_advanced_state CASCADE',
+    'DROP SEQUENCE IF EXISTS dbweb_advanced_sequence CASCADE',
+    'DROP EXTENSION IF EXISTS pgcrypto CASCADE',
+  ]
+  for (const statement of statements) await postgresQuery(statement)
+}
+
+async function cleanupMysqlAdvancedObjects(): Promise<void> {
+  const statements = [
+    'DROP EVENT IF EXISTS dbweb_advanced_event',
+    'DROP TRIGGER IF EXISTS dbweb_advanced_trigger',
+    'DROP PROCEDURE IF EXISTS dbweb_noop_procedure',
+    'DROP FUNCTION IF EXISTS dbweb_constant_value',
+    'DROP VIEW IF EXISTS dbweb_advanced_view',
+    'DROP TABLE IF EXISTS dbweb_partitioned_events',
+    'DROP TABLE IF EXISTS dbweb_advanced_source',
+  ]
+  for (const statement of statements) await mysqlQuery(statement)
 }
