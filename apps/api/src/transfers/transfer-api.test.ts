@@ -13,6 +13,8 @@ import { AuthService } from '../auth/auth-service.js'
 import { MemoryAuthRepository } from '../auth/memory-auth-repository.js'
 import { EnvelopeEncryption } from '../security/envelope-encryption.js'
 import { EncryptedChunkStore } from './encrypted-chunk-store.js'
+import { ExactCsvExportError } from './exact-csv-export-service.js'
+import { ExactCsvPreviewError } from './exact-csv-preview.js'
 import { ExactJsonExportError } from './exact-json-export-service.js'
 import { TransferDownloadService } from './transfer-download-service.js'
 import { TransferHandlerRouter } from './transfer-handler-router.js'
@@ -385,6 +387,64 @@ describe('transfer HTTP API', () => {
       payload: { previewToken: 'v1.preview-token.signature' },
     })
 
+    expect(response.statusCode).toBe(502)
+    expect(response.json()).toEqual({ error: { code: 'EXPORT_FAILED', message: 'Transfer export failed' } })
+  })
+
+  it('將精確CSV preview驗證錯誤映射為安全回應', async () => {
+    const environment = await setup()
+    const headers = {
+      cookie: environment.operator.cookie,
+      'x-csrf-token': environment.operator.csrf,
+      'accept-language': 'en',
+    }
+    await environment.access.assign(environment.adminUser, environment.operatorUser.id, 'connection-1', ['data-read'])
+    const created = await environment.app.inject({
+      method: 'POST', url: '/api/transfers', headers,
+      payload: { connectionId: 'connection-1', direction: 'export', format: 'csv' },
+    })
+    const jobId = created.json<StoredTransferJob>().id
+
+    environment.preview.mockRejectedValueOnce(new ExactCsvPreviewError('INVALID_PREVIEW'))
+    const invalid = await environment.app.inject({
+      method: 'POST', url: `/api/transfers/${jobId}/preview`, headers,
+      payload: { mapping: {}, strategy: { mode: 'exact' }, target: {} },
+    })
+    expect(invalid.statusCode).toBe(422)
+    expect(invalid.json()).toEqual({
+      error: { code: 'INVALID_PREVIEW', message: 'Transfer preview settings are invalid' },
+    })
+
+    environment.preview.mockRejectedValueOnce(new ExactCsvPreviewError('CONFIRMATION_REQUIRED'))
+    const unconfirmed = await environment.app.inject({
+      method: 'POST', url: `/api/transfers/${jobId}/preview`, headers,
+      payload: { mapping: {}, strategy: { mode: 'exact' }, target: {} },
+    })
+    expect(unconfirmed.statusCode).toBe(409)
+    expect(unconfirmed.json()).toEqual({
+      error: { code: 'TRANSFER_CONFIRMATION_REQUIRED', message: 'Transfer operation requires confirmation' },
+    })
+  })
+
+  it('不洩露精確CSV匯出的底層失敗', async () => {
+    const environment = await setup()
+    const headers = {
+      cookie: environment.operator.cookie,
+      'x-csrf-token': environment.operator.csrf,
+      'accept-language': 'en',
+    }
+    await environment.access.assign(environment.adminUser, environment.operatorUser.id, 'connection-1', ['data-read'])
+    const created = await environment.app.inject({
+      method: 'POST', url: '/api/transfers', headers,
+      payload: { connectionId: 'connection-1', direction: 'export', format: 'csv' },
+    })
+    const jobId = created.json<StoredTransferJob>().id
+    environment.execute.mockRejectedValueOnce(new ExactCsvExportError('EXPORT_FAILED'))
+
+    const response = await environment.app.inject({
+      method: 'POST', url: `/api/transfers/${jobId}/execute`, headers,
+      payload: { previewToken: 'v1.preview-token.signature' },
+    })
     expect(response.statusCode).toBe(502)
     expect(response.json()).toEqual({ error: { code: 'EXPORT_FAILED', message: 'Transfer export failed' } })
   })

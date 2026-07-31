@@ -42,7 +42,11 @@ import {
   type SqlQueryService,
 } from './query/sql-query-service.js'
 import type { SshKnownHostService } from './ssh/ssh-known-host-service.js'
+import { CsvTransferHandlerError } from './transfers/csv-transfer-handler.js'
 import { TransferChunkError } from './transfers/encrypted-chunk-store.js'
+import { ExactCsvExportError } from './transfers/exact-csv-export-service.js'
+import { ExactCsvImportError } from './transfers/exact-csv-import-service.js'
+import { ExactCsvPreviewError } from './transfers/exact-csv-preview.js'
 import { ExactJsonExportError } from './transfers/exact-json-export-service.js'
 import { ExactJsonImportPreviewError } from './transfers/exact-json-import-preview.js'
 import { ExactJsonImportError } from './transfers/exact-json-import-service.js'
@@ -434,13 +438,20 @@ function handleTransferError(
     }
     return sendError(request, reply, 422, 'INVALID_PREVIEW')
   }
-  if (error instanceof ExactJsonPreviewError || error instanceof ExactJsonImportPreviewError) {
+  if (
+    error instanceof ExactJsonPreviewError
+    || error instanceof ExactJsonImportPreviewError
+    || error instanceof ExactCsvPreviewError
+  ) {
     if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
     if (error.code === 'PREVIEW_NOT_FOUND') return sendError(request, reply, 404, error.code)
     if (error.code === 'PREVIEW_CHANGED' || error.code === 'PREVIEW_EXPIRED') {
       return sendError(request, reply, 409, error.code)
     }
-    if (error instanceof ExactJsonImportPreviewError && error.code === 'CONFIRMATION_REQUIRED') {
+    if (
+      (error instanceof ExactJsonImportPreviewError || error instanceof ExactCsvPreviewError)
+      && error.code === 'CONFIRMATION_REQUIRED'
+    ) {
       return sendError(request, reply, 409, 'TRANSFER_CONFIRMATION_REQUIRED')
     }
     return sendError(request, reply, 422, 'INVALID_PREVIEW')
@@ -451,14 +462,14 @@ function handleTransferError(
     if (error.code === 'INVALID_EXPORT_JOB') return sendError(request, reply, 409, error.code)
     return sendError(request, reply, 502, 'EXPORT_FAILED')
   }
-  if (error instanceof ExactJsonExportError) {
+  if (error instanceof ExactJsonExportError || error instanceof ExactCsvExportError) {
     if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
     if (error.code === 'EXPORT_CANCELLED' || error.code === 'INVALID_EXPORT_JOB') {
       return sendError(request, reply, 409, error.code)
     }
     return sendError(request, reply, 502, 'EXPORT_FAILED')
   }
-  if (error instanceof ExactJsonImportError) {
+  if (error instanceof ExactJsonImportError || error instanceof ExactCsvImportError) {
     if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
     if (error.code === 'IMPORT_CANCELLED' || error.code === 'INVALID_IMPORT_JOB') {
       return sendError(request, reply, 409, error.code)
@@ -467,6 +478,9 @@ function handleTransferError(
   }
   if (error instanceof TransferHandlerRouterError) {
     return sendError(request, reply, 422, error.code)
+  }
+  if (error instanceof CsvTransferHandlerError) {
+    return sendError(request, reply, 422, 'UNSUPPORTED_TRANSFER_HANDLER')
   }
   throw error
 }
