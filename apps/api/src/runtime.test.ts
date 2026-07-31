@@ -160,6 +160,16 @@ describe('runtime', () => {
       method: 'GET',
       url: '/api/transfers',
     })).statusCode).toBe(401)
+    expect((await app.inject({
+      method: 'POST',
+      url: '/api/transfers/11111111-1111-4111-8111-111111111111/preview',
+      payload: { mapping: {}, strategy: {}, target: {} },
+    })).statusCode).toBe(401)
+    expect((await app.inject({
+      method: 'POST',
+      url: '/api/transfers/11111111-1111-4111-8111-111111111111/execute',
+      payload: { previewToken: 'v1.test.signature' },
+    })).statusCode).toBe(401)
     const login = await app.inject({
       method: 'POST',
       url: '/api/auth/login',

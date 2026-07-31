@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -51,6 +51,7 @@ import {
 } from './metadata/kysely-ssh-known-host-repository.js'
 import { KyselyTransferJobRepository } from './metadata/kysely-transfer-job-repository.js'
 import { KyselyTransferAuditRepository } from './metadata/kysely-transfer-audit-repository.js'
+import { KyselyTransferPreviewPlanRepository } from './metadata/kysely-transfer-preview-plan-repository.js'
 import { KyselyWebAccessRepository } from './metadata/kysely-web-access-repository.js'
 import {
   createMetadataDatabase,
@@ -66,13 +67,29 @@ import { SshKnownHostService } from './ssh/ssh-known-host-service.js'
 import { Ssh2TransportFactory } from './ssh/ssh2-transport-factory.js'
 import { SshTunnelPool, type SshTransportFactory } from './ssh/ssh-tunnel-pool.js'
 import { EncryptedChunkStore } from './transfers/encrypted-chunk-store.js'
+import { ExactJsonExportService } from './transfers/exact-json-export-service.js'
+import { ExactJsonImportPreviewCoordinator } from './transfers/exact-json-import-preview.js'
+import { ExactJsonImportService } from './transfers/exact-json-import-service.js'
+import { ExactJsonPackageWriter } from './transfers/exact-json-package-writer.js'
+import { ExactJsonPreviewCoordinator } from './transfers/exact-json-preview.js'
 import { EncryptedTransferAuditRecorder, type TransferAuditRecorder } from './transfers/transfer-audit.js'
 import {
   TransferCleanupScheduler,
   TransferCleanupService,
 } from './transfers/transfer-cleanup-service.js'
 import { TransferDownloadService } from './transfers/transfer-download-service.js'
+import { FriendlyCsvExportService } from './transfers/friendly-csv-export-service.js'
+import { FriendlyCsvPreviewCoordinator } from './transfers/friendly-csv-preview.js'
+import { MysqlExactJsonImportGateway } from './transfers/mysql-exact-json-import-gateway.js'
+import { MysqlTransferDataGateway } from './transfers/mysql-transfer-data-gateway.js'
+import { PostgresExactJsonImportGateway } from './transfers/postgres-exact-json-import-gateway.js'
+import { PostgresTransferDataGateway } from './transfers/postgres-transfer-data-gateway.js'
+import { TransferHandlerRouter } from './transfers/transfer-handler-router.js'
 import { type CreateTransferJobInput, TransferJobService } from './transfers/transfer-job.js'
+import { TransferOutputWriter } from './transfers/transfer-output-writer.js'
+import { EncryptedTransferPreviewPlanStore } from './transfers/transfer-preview-plan.js'
+import { TransferPreviewService } from './transfers/transfer-preview-service.js'
+import { TransferPreviewTokenService } from './transfers/transfer-preview-token.js'
 import { TransferUploadService } from './transfers/transfer-upload-service.js'
 
 export interface RuntimeConfig {
@@ -225,12 +242,13 @@ export async function buildRuntime(
       postgres: postgresDatabase,
       mysql: mysqlDatabase,
     })
+    const dataMutationGateways = {
+      postgres: new PostgresDataMutationGateway(undefined, socketProvider),
+      mysql: new MysqlDataMutationGateway(undefined, socketProvider),
+    }
     const dataMutationService = new DataMutationService(
       connectionService,
-      {
-        postgres: new PostgresDataMutationGateway(undefined, socketProvider),
-        mysql: new MysqlDataMutationGateway(undefined, socketProvider),
-      },
+      dataMutationGateways,
       new EncryptedMutationAuditRecorder(
         new KyselyMutationAuditRepository(database),
         encryption,
@@ -317,6 +335,11 @@ export async function buildRuntime(
       encryption,
       purposeNamespace: 'output',
     })
+    const transferJsonStageStore = new EncryptedChunkStore({
+      root: join(transferRoot, 'json-stage'),
+      encryption,
+      purposeNamespace: 'json-stage',
+    })
     const transferUploadService = new TransferUploadService(
       transferJobService,
       transferSourceStore,
@@ -331,10 +354,130 @@ export async function buildRuntime(
       (actor, job) => authorizeTransfer(webAccessService, actor, job),
       transferAudit,
     )
+    const transferPreviewTokens = new TransferPreviewTokenService(
+      createHmac('sha256', config.masterKey)
+        .update('dbweb-transfer-preview-token-v1')
+        .digest(),
+    )
+    const transferPreviewPlanRepository = new KyselyTransferPreviewPlanRepository(database)
+    const transferPreviewPlans = new EncryptedTransferPreviewPlanStore(
+      transferPreviewPlanRepository,
+      encryption,
+      transferPreviewTokens,
+    )
+    const friendlyCsvPreview = new FriendlyCsvPreviewCoordinator(
+      transferJobService,
+      connectionService,
+      dataMutationGateways,
+      transferPreviewPlans,
+      async (actor, job) => {
+        const allowed = await webAccessService.can(actor, job.connectionId, 'data-read')
+        return {
+          allowed,
+          fingerprint: createHash('sha256')
+            .update(JSON.stringify({ capability: 'data-read', allowed }))
+            .digest('hex'),
+        }
+      },
+    )
+    const transferDataGateways = {
+      postgres: new PostgresTransferDataGateway(undefined, undefined, socketProvider),
+      mysql: new MysqlTransferDataGateway(undefined, undefined, socketProvider),
+    }
+    const friendlyCsvExportService = new FriendlyCsvExportService(
+      transferJobService,
+      connectionService,
+      transferDataGateways,
+      new TransferOutputWriter(transferOutputStore),
+      friendlyCsvPreview,
+      (actor, job) => webAccessService.can(actor, job.connectionId, 'data-read'),
+      undefined,
+      transferAudit,
+    )
+    const exactJsonAuthorizer = async (
+      actor: { id: string; role: 'admin' | 'user' },
+      job: CreateTransferJobInput,
+    ) => {
+      const allowed = await authorizeTransfer(webAccessService, actor, job)
+      return {
+        allowed,
+        fingerprint: createHash('sha256')
+          .update(JSON.stringify({ direction: job.direction, format: job.format, allowed }))
+          .digest('hex'),
+      }
+    }
+    const sourcePackages = { stream: (jobId: string) => streamStoredChunks(transferSourceStore, jobId) }
+    const exactJsonExportPreview = new ExactJsonPreviewCoordinator(
+      transferJobService,
+      connectionService,
+      dataMutationGateways,
+      transferPreviewPlans,
+      exactJsonAuthorizer,
+    )
+    const exactJsonImportPreview = new ExactJsonImportPreviewCoordinator(
+      transferJobService,
+      connectionService,
+      dataMutationGateways,
+      sourcePackages,
+      transferPreviewPlans,
+      exactJsonAuthorizer,
+    )
+    const exactJsonPackages = new ExactJsonPackageWriter(
+      new TransferOutputWriter(transferJsonStageStore),
+      transferJsonStageStore,
+      new TransferOutputWriter(transferOutputStore),
+    )
+    const exactJsonExportService = new ExactJsonExportService(
+      transferJobService,
+      connectionService,
+      transferDataGateways,
+      exactJsonPackages,
+      exactJsonExportPreview,
+      (actor, job) => authorizeTransfer(webAccessService, actor, job),
+      undefined,
+      transferAudit,
+    )
+    const exactJsonImportService = new ExactJsonImportService(
+      transferJobService,
+      connectionService,
+      {
+        postgres: new PostgresExactJsonImportGateway(undefined, socketProvider),
+        mysql: new MysqlExactJsonImportGateway(undefined, socketProvider),
+      },
+      sourcePackages,
+      exactJsonImportPreview,
+      (actor, job) => authorizeTransfer(webAccessService, actor, job),
+      undefined,
+      transferAudit,
+    )
+    const transferHandlers = new TransferHandlerRouter(transferJobService, {
+      friendlyCsvExport: {
+        inspect: (...args) => friendlyCsvPreview.inspect(...args),
+        execute: (...args) => friendlyCsvExportService.execute(...args),
+        cancel: (...args) => friendlyCsvExportService.cancel(...args),
+      },
+      exactJsonExport: {
+        inspect: (...args) => exactJsonExportPreview.inspect(...args),
+        execute: (...args) => exactJsonExportService.execute(...args),
+        cancel: (...args) => exactJsonExportService.cancel(...args),
+      },
+      exactJsonImport: {
+        inspect: (...args) => exactJsonImportPreview.inspect(...args),
+        execute: (...args) => exactJsonImportService.execute(...args),
+        cancel: (...args) => exactJsonImportService.cancel(...args),
+      },
+    })
+    const transferPreviewService = new TransferPreviewService(
+      transferJobService,
+      transferHandlers,
+      transferPreviewTokens,
+      transferPreviewPlans,
+      transferAudit,
+    )
     const transferCleanupService = new TransferCleanupService(
       transferJobRepository,
-      [transferSourceStore, transferOutputStore],
-      [transferAuditRepository],
+      [transferSourceStore, transferOutputStore, transferJsonStageStore],
+      [transferAuditRepository, transferPreviewPlanRepository],
     )
     transferCleanupScheduler = dependencies.createTransferCleanupScheduler?.(
       transferCleanupService,
@@ -360,6 +503,8 @@ export async function buildRuntime(
       transferJobService,
       transferUploadService,
       transferDownloadService,
+      transferPreviewService,
+      transferExecutionService: transferHandlers,
       sshKnownHostService: knownHosts,
       webAccessService,
       csrfSecret,
@@ -383,6 +528,17 @@ export async function buildRuntime(
     await tunnelPool?.close()
     await database.destroy()
     throw error
+  }
+}
+
+async function* streamStoredChunks(
+  store: Pick<EncryptedChunkStore, 'list' | 'read'>,
+  jobId: string,
+): AsyncIterable<Buffer> {
+  const chunks = await store.list(jobId)
+  for (let index = 0; index < chunks.length; index += 1) {
+    if (chunks[index]?.index !== index) throw new Error('TRANSFER_CHUNK_SEQUENCE_INVALID')
+    yield await store.read(jobId, index)
   }
 }
 
