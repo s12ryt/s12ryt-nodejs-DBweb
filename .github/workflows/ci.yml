@@ -79,7 +79,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec vitest run apps/api/src/data/data-mutation.integration.test.ts
+      - run: pnpm exec vitest run apps/api/src/data/data-mutation.integration.test.ts apps/api/src/ddl/ddl.integration.test.ts
         env:
           DBWEB_INTEGRATION_ENGINE: postgres
           DBWEB_INTEGRATION_HOST: 127.0.0.1
@@ -118,7 +118,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec vitest run apps/api/src/data/data-mutation.integration.test.ts
+      - run: pnpm exec vitest run apps/api/src/data/data-mutation.integration.test.ts apps/api/src/ddl/ddl.integration.test.ts
         env:
           DBWEB_INTEGRATION_ENGINE: mysql
           DBWEB_INTEGRATION_HOST: 127.0.0.1
