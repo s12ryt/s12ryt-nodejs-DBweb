@@ -20,6 +20,7 @@ export type DdlDefault =
   | { kind: 'null' }
   | { kind: 'literal'; value: string | number | boolean }
   | { kind: 'function'; name: string }
+  | { kind: 'sequence'; schema: string; name: string }
 
 export interface DdlColumnType {
   name: string

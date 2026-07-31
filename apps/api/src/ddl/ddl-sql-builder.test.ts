@@ -57,6 +57,30 @@ describe('buildDdlStatements', () => {
     })).toThrow(new DdlValidationError('DDL_TYPE_UNSUPPORTED'))
   })
 
+  it('以結構化 sequence default 還原 PostgreSQL 9.6 serial 語意', () => {
+    expect(buildDdlStatements(postgres96, {
+      kind: 'create-table',
+      schema: 'public',
+      name: 'orders',
+      columns: [{
+        name: 'id',
+        type: { name: 'bigint' },
+        nullable: false,
+        default: { kind: 'sequence', schema: 'public', name: 'orders_id_seq' },
+      }],
+      primaryKey: ['id'],
+    })).toEqual([
+      `CREATE TABLE "public"."orders" ("id" bigint DEFAULT nextval('"public"."orders_id_seq"'::regclass) NOT NULL, PRIMARY KEY ("id"))`,
+    ])
+    expect(() => buildDdlStatements(mysql56, {
+      kind: 'add-column', schema: 'app', table: 'orders',
+      column: {
+        name: 'id', type: { name: 'bigint' }, nullable: false,
+        default: { kind: 'sequence', schema: 'public', name: 'orders_id_seq' },
+      },
+    })).toThrow(new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED'))
+  })
+
   it('建立 MySQL 5.6 table 並限制 storage options 為結構化值', () => {
     expect(buildDdlStatements(mysql56, {
       kind: 'create-table',
