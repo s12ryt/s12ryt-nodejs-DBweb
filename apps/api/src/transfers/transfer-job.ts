@@ -34,6 +34,12 @@ export interface StoredTransferJob {
   sourceBytes?: number
   sourceChecksum?: string
   uploadCompletedAt?: string
+  executionRequestedAt?: string
+  executionRequestedBy?: string
+  leaseOwner?: string
+  leaseExpiresAt?: string
+  attemptCount?: number
+  nextAttemptAt?: string
   createdAt: string
   updatedAt: string
   expiresAt: string
