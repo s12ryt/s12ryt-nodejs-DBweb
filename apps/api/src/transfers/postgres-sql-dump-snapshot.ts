@@ -180,7 +180,10 @@ class PostgresSqlDumpSnapshotSession implements SqlDumpSnapshotSession {
     try { await this.client.end() } finally { this.socket?.destroy() }
   }
 
-  private async listTables(scope: SqlDumpScope, serverMajor: number): Promise<Array<{ schema: string; name: string }>> {
+  private async listTables(
+    scope: SqlDumpScope,
+    serverMajor: number,
+  ): Promise<Array<{ schema: string; name: string; partitionBy?: SqlDumpTableDefinition['partitionBy'] }>> {
     const clauses = ["c.relkind IN ('r', 'p')", 'n.nspname NOT LIKE \'pg\\_%\' ESCAPE \'\\\'', "n.nspname <> 'information_schema'"]
     if (serverMajor >= 10) clauses.push('NOT c.relispartition')
     const values: unknown[] = []
@@ -193,18 +196,23 @@ class PostgresSqlDumpSnapshotSession implements SqlDumpSnapshotSession {
       clauses.push(`c.relname = $${values.length}`)
     }
     const result = await this.client.query(
-      `SELECT n.nspname AS dbweb_table_schema, c.relname AS dbweb_table_name
+      `SELECT n.nspname AS dbweb_table_schema, c.relname AS dbweb_table_name,
+              ${serverMajor >= 10 ? 'pg_catalog.pg_get_partkeydef(c.oid)' : 'NULL::text'} AS dbweb_partition_key
        FROM pg_catalog.pg_class c
        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
        WHERE ${clauses.join(' AND ')}
        ORDER BY n.nspname, c.relname`,
       values,
     )
-    return result.rows.map((row) => ({ schema: requiredString(row.dbweb_table_schema), name: requiredString(row.dbweb_table_name) }))
+    return result.rows.map((row) => ({
+      schema: requiredString(row.dbweb_table_schema),
+      name: requiredString(row.dbweb_table_name),
+      ...parsePartitionKey(row.dbweb_partition_key),
+    }))
   }
 
   private async describeTable(
-    table: { schema: string; name: string },
+    table: { schema: string; name: string; partitionBy?: SqlDumpTableDefinition['partitionBy'] },
     serverMajor: number,
   ): Promise<SqlDumpTableDefinition> {
     const values = [table.schema, table.name]
@@ -220,6 +228,7 @@ class PostgresSqlDumpSnapshotSession implements SqlDumpSnapshotSession {
       name: table.name,
       columns,
       ...(primary?.constraint.kind === 'primary-key' ? { primaryKey: [...primary.constraint.columns] } : {}),
+      ...(table.partitionBy ? { partitionBy: { ...table.partitionBy } } : {}),
       constraints: remaining,
       indexes: indexesResult.rows.map(mapIndex),
     }
@@ -385,7 +394,17 @@ class PostgresSqlDumpSnapshotSession implements SqlDumpSnapshotSession {
   private async describeRoutines(scope: SqlDumpScope, serverMajor: number): Promise<SqlDumpObject[]> {
     if (scope.kind === 'table') return []
     const values: unknown[] = []
-    const clauses = ["n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'", "n.nspname <> 'information_schema'", "l.lanname IN ('sql', 'plpgsql')"]
+    const clauses = [
+      "n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'",
+      "n.nspname <> 'information_schema'",
+      "l.lanname IN ('sql', 'plpgsql')",
+      `NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_depend dep
+        WHERE dep.classid = 'pg_proc'::regclass
+          AND dep.objid = p.oid
+          AND dep.deptype = 'e'
+      )`,
+    ]
     if (scope.kind === 'schema') {
       values.push(scope.schema)
       clauses.push(`n.nspname = $${values.length}`)
@@ -1004,6 +1023,19 @@ function normalizeDate(value: unknown, type: DatabaseValueType): unknown {
 function requiredString(value: unknown): string {
   if (typeof value !== 'string' || !value) failed()
   return value
+}
+
+function parsePartitionKey(value: unknown): { partitionBy?: SqlDumpTableDefinition['partitionBy'] } {
+  if (value == null) return {}
+  if (typeof value !== 'string') failed()
+  const match = /^\s*(RANGE|LIST|HASH)\s*\(([\s\S]+)\)\s*$/i.exec(value)
+  if (!match?.[1] || !match[2]?.trim()) failed()
+  return {
+    partitionBy: {
+      method: match[1].toLowerCase() as 'range' | 'list' | 'hash',
+      expression: match[2].trim(),
+    },
+  }
 }
 
 function nullableString(value: unknown): string | undefined {

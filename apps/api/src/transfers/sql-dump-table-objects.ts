@@ -23,6 +23,7 @@ export interface SqlDumpTableDefinition {
   name: string
   columns: DdlColumnDefinition[]
   primaryKey?: string[]
+  partitionBy?: { method: 'range' | 'list' | 'hash'; expression: string }
   constraints: SqlDumpTableConstraint[]
   indexes: SqlDumpTableIndex[]
   engine?: string
@@ -55,6 +56,7 @@ export function buildSqlDumpTableObjects(
       name: table.name,
       columns: structuredClone(table.columns),
       ...(table.primaryKey ? { primaryKey: [...table.primaryKey] } : {}),
+      ...(table.partitionBy ? { partitionBy: { ...table.partitionBy } } : {}),
       ...(table.engine ? { engine: table.engine } : {}),
       ...(table.charset ? { charset: table.charset } : {}),
       ...(table.collation ? { collation: table.collation } : {}),

@@ -138,13 +138,17 @@ describe('PostgreSQL SQL dump snapshot', () => {
   })
 
   it('exports structured PostgreSQL views, sequences, types, domains, and extensions with dependencies', async () => {
+    const queries: string[] = []
     const client: PostgresSqlDumpClient = {
       connect: vi.fn().mockResolvedValue(undefined),
       query: vi.fn((input: string | PostgresSqlDumpCursor) => {
         if (typeof input !== 'string') return input
+        queries.push(input)
         if (input === 'SHOW server_version') return Promise.resolve({ rows: [{ server_version: '17.5' }] })
         if (input.includes('dbweb_schema_name')) return Promise.resolve({ rows: [{ dbweb_schema_name: 'public' }] })
-        if (input.includes('dbweb_table_schema')) return Promise.resolve({ rows: [{ dbweb_table_schema: 'public', dbweb_table_name: 'orders' }] })
+        if (input.includes('dbweb_table_schema')) return Promise.resolve({ rows: [{
+          dbweb_table_schema: 'public', dbweb_table_name: 'orders', dbweb_partition_key: 'RANGE (id)',
+        }] })
         if (input.includes('dbweb_column_name')) return Promise.resolve({ rows: [{
           dbweb_column_name: 'id', dbweb_type_name: 'int8', dbweb_type_category: 'N',
           dbweb_formatted_type: 'bigint', dbweb_nullable: false,
@@ -237,6 +241,8 @@ describe('PostgreSQL SQL dump snapshot', () => {
     ])
     expect(snapshot.manifest.objects.find((object) => object.id === 'table:public.orders')?.dependencies)
       .toEqual(['schema:public', 'sequence:public.orders_id_seq'])
+    expect(snapshot.manifest.objects.find((object) => object.id === 'table:public.orders')?.createCommands[0])
+      .toEqual(expect.objectContaining({ partitionBy: { method: 'range', expression: 'id' } }))
     expect(snapshot.manifest.objects.find((object) => object.id === 'view:public.active_orders')).toEqual(expect.objectContaining({
       dependencies: ['schema:public', 'table:public.orders'],
       createCommands: [expect.objectContaining({
@@ -286,6 +292,8 @@ describe('PostgreSQL SQL dump snapshot', () => {
         definition: "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')", confirmed: true,
       }],
     }))
+    expect(queries.find((sql) => sql.includes('dbweb_routine_kind'))).toContain("dep.deptype = 'e'")
+    expect(queries.find((sql) => sql.includes('dbweb_table_schema'))).toContain('pg_get_partkeydef')
   })
 })
 
