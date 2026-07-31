@@ -83,4 +83,5 @@
 - friendly CSV 與精確 JSON 切片以18筆English plain原子提交推送main；GitHub Actions run `30637137877` 的quality、Docker、三瀏覽器與PG9.6/17、MySQL5.6/8.4既有integration jobs全部通過。該run尚未執行transfer roundtrip，不能取代後續CSV/JSON四版本驗收。
 - 完成精確CSV package、export/import services、server-derived preview及CSV composite handler；exact import重用同一PG/MySQL方言gateway，因此atomic/batch、skip/update/replace、partial progress與identity規則不分叉。
 - 新增exact CSV/JSON真實roundtrip integration，從PG/MySQL一致性快照串流到用途隔離的加密staging/output，解析gzip tar後以正式方言gateway匯入並查回資料；workflow已納入PG9.6/17與MySQL5.6/8.4，待遠端驗證。
+- exact CSV/JSON切片以8筆English plain原子提交推送；GitHub Actions run `30640147483` 的quality、Docker、三瀏覽器及PG9.6/17、MySQL5.6/8.4全部通過。四個資料庫job均實際執行exact CSV與多表JSON gzip package roundtrip，因此M5B完成並進入M5C。
 - 本切片本機驗證為99個Vitest檔通過、4個integration檔略過，389 tests通過、12 cases略過；ESLint、workspace strict typecheck、production build及Playwright 7 passed/2 responsive skipped全綠。

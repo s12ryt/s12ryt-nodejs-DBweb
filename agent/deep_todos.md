@@ -14,7 +14,7 @@
 - [x] 完成里程碑四 B：原生 DB 帳號、加密憑證、背景驗證與生命週期。
 - [x] 完成里程碑四 C：跨 database 權限與完整驗收。
 - [x] 完成里程碑五 A：持久化 job、分段加密暫存、preview 與安全下載基礎。
-- [ ] 完成里程碑五 B：CSV/JSON 串流匯入匯出、映射、衝突與續傳。
+- [x] 完成里程碑五 B：CSV/JSON 串流匯入匯出、映射、衝突與續傳。
 - [ ] 完成里程碑五 C：純 Node SQL dump/restore、進階物件、UI與完整驗收。
 - [ ] 完成里程碑六：多實例、效能、安全與完整回歸。
 
@@ -83,4 +83,5 @@
 - 2026-07-31：精確 JSON 與 friendly CSV 切片以18筆原子提交推送；GitHub Actions run `30637137877` 的 quality、Docker image、browser、PostgreSQL 9.6/17 與 MySQL 5.6/8.4 既有矩陣全部通過。資料庫 jobs 尚未納入 transfer roundtrip，因此精確 CSV 與四版本 CSV/JSON roundtrip 仍是 M5B 驗收缺口。
 - 2026-07-31：完成精確 CSV sidecar/data 安全 tar/gzip package、server-derived export/import preview、單表一致快照匯出及重用方言 import gateway 的 atomic/batch、衝突與續傳語意；CSV composite handler 依加密 preview plan 區分 friendly/exact，不接受 client 在 execute 時切換模式。
 - 2026-07-31：新增四版本 exact CSV/JSON 真實 roundtrip integration，串起資料庫快照、tagged 格式、用途隔離加密 staging/output、package reader與正式方言 import gateway；本機無資料庫時兩案明確略過，已加入 PostgreSQL 9.6/17 與 MySQL 5.6/8.4 workflow，待遠端實跑。
+- 2026-07-31：M5B exact CSV/JSON roundtrip 以8筆原子提交推送；GitHub Actions run `30640147483` 的 quality、Docker image、browser、PostgreSQL 9.6/17 與 MySQL 5.6/8.4 全綠，四個資料庫 job 均實際完成 gzip package 匯出、解析與正式方言匯入。M5B 完成並直接進入 M5C SQL dump/restore。
 - 2026-07-31：本切片完整本機驗證為99個Vitest檔通過、4個integration檔略過，389 tests通過、12個無本機DB cases略過；lint、strict typecheck、production build及Playwright 7 passed/2 responsive skipped全綠。
