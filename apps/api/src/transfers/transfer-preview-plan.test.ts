@@ -75,4 +75,23 @@ describe('EncryptedTransferPreviewPlanStore', () => {
       new TransferPreviewPlanError('PREVIEW_EXPIRED'),
     )
   })
+
+  it('reissues a worker token only while the stored preview plan remains valid', async () => {
+    const jobId = randomUUID()
+    const now = new Date('2026-07-31T12:00:00.000Z')
+    const repository = new MemoryTransferPreviewPlanRepository()
+    const tokens = new TransferPreviewTokenService(Buffer.alloc(32, 45), () => now)
+    const store = new EncryptedTransferPreviewPlanStore(
+      repository,
+      new EnvelopeEncryption(Buffer.alloc(32, 46)),
+      tokens,
+      () => now,
+    )
+    const expected = fingerprint(jobId)
+    await store.save(jobId, expected, { kind: 'plan' })
+
+    const token = await store.issue(jobId)
+
+    expect(tokens.verify(token, expected)).toEqual(expected)
+  })
 })

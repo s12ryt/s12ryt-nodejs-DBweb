@@ -109,6 +109,26 @@ export class EncryptedTransferPreviewPlanStore implements TransferPreviewPlanWri
       throw new TransferPreviewPlanError('INVALID_PREVIEW_PLAN')
     }
   }
+
+  async issue(jobId: string): Promise<string> {
+    const stored = await this.repository.find(jobId)
+    if (!stored) throw new TransferPreviewPlanError('PREVIEW_NOT_FOUND')
+    if (this.now().getTime() > Date.parse(stored.expiresAt)) {
+      throw new TransferPreviewPlanError('PREVIEW_EXPIRED')
+    }
+    try {
+      const payload = parseStoredPayload(
+        this.encryption.decrypt(stored.encryptedPayload, `transfer-preview-plan:${jobId}`),
+      )
+      if (payload.fingerprint.jobId !== jobId) {
+        throw new TransferPreviewPlanError('INVALID_PREVIEW_PLAN')
+      }
+      return this.tokens.issue(payload.fingerprint)
+    } catch (error) {
+      if (error instanceof TransferPreviewPlanError) throw error
+      throw new TransferPreviewPlanError('INVALID_PREVIEW_PLAN')
+    }
+  }
 }
 
 export class MemoryTransferPreviewPlanRepository implements TransferPreviewPlanRepository {
