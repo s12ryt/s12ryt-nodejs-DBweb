@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1101.0",
     "@fastify/cookie": "11.1.2",
     "@fastify/helmet": "13.1.0",
     "@fastify/rate-limit": "11.2.0",
@@ -22,6 +23,7 @@
     "mysql2": "3.23.2",
     "pg": "8.22.0",
     "pg-cursor": "2.21.0",
+    "redis": "6.2.0",
     "ssh2": "1.17.0",
     "zod": "4.4.3"
   },
