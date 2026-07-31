@@ -44,6 +44,16 @@ export interface DdlIndexPart {
   prefixLength?: number
 }
 
+export interface DdlRoutineArgument {
+  name?: string
+  mode?: 'in' | 'out' | 'inout'
+  type: DdlColumnType
+}
+
+export type DdlEventSchedule =
+  | { kind: 'at'; at: string }
+  | { kind: 'every'; amount: number; unit: 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year' }
+
 export type DdlReferentialAction = string
 
 export type DdlConstraint =
@@ -118,3 +128,115 @@ export type DdlCommand =
       cascade?: boolean
       confirmed: boolean
     }
+  | { kind: 'create-view'; schema: string; name: string; query: string; replace?: boolean; confirmed: boolean }
+  | { kind: 'drop-view'; schema: string; name: string; cascade?: boolean; confirmed: boolean }
+  | {
+      kind: 'create-materialized-view'
+      schema: string
+      name: string
+      query: string
+      withData: boolean
+      confirmed: boolean
+    }
+  | {
+      kind: 'refresh-materialized-view'
+      schema: string
+      name: string
+      concurrently?: boolean
+      confirmed: boolean
+    }
+  | { kind: 'drop-materialized-view'; schema: string; name: string; cascade?: boolean; confirmed: boolean }
+  | {
+      kind: 'create-sequence'
+      schema: string
+      name: string
+      start?: number
+      increment?: number
+      minValue?: number
+      maxValue?: number
+      cache?: number
+      cycle?: boolean
+    }
+  | { kind: 'drop-sequence'; schema: string; name: string; cascade?: boolean; confirmed: boolean }
+  | { kind: 'create-enum'; schema: string; name: string; values: string[] }
+  | {
+      kind: 'create-domain'
+      schema: string
+      name: string
+      baseType: DdlColumnType
+      nullable: boolean
+      default?: DdlDefault
+      check?: string
+      confirmed: boolean
+    }
+  | { kind: 'drop-type'; schema: string; name: string; cascade?: boolean; confirmed: boolean }
+  | {
+      kind: 'create-extension'
+      name: string
+      schema?: string
+      version?: string
+      cascade?: boolean
+      confirmed: boolean
+    }
+  | { kind: 'drop-extension'; name: string; cascade?: boolean; confirmed: boolean }
+  | {
+      kind: 'create-routine'
+      routineKind: 'function' | 'procedure'
+      schema: string
+      name: string
+      arguments: DdlRoutineArgument[]
+      returns?: DdlColumnType
+      returnsSet?: boolean
+      language?: string
+      body: string
+      replace?: boolean
+      volatility?: 'volatile' | 'stable' | 'immutable'
+      security?: 'invoker' | 'definer'
+      strict?: boolean
+      confirmed: boolean
+    }
+  | {
+      kind: 'drop-routine'
+      routineKind: 'function' | 'procedure'
+      schema: string
+      name: string
+      argumentTypes: DdlColumnType[]
+      cascade?: boolean
+      confirmed: boolean
+    }
+  | {
+      kind: 'create-trigger'
+      schema: string
+      table: string
+      name: string
+      timing: 'before' | 'after' | 'instead-of'
+      events: Array<'insert' | 'update' | 'delete' | 'truncate'>
+      forEach: 'row' | 'statement'
+      when?: string
+      functionSchema?: string
+      functionName?: string
+      functionArguments?: string[]
+      body?: string
+      confirmed: boolean
+    }
+  | { kind: 'drop-trigger'; schema: string; table: string; name: string; confirmed: boolean }
+  | {
+      kind: 'create-event'
+      schema: string
+      name: string
+      schedule: DdlEventSchedule
+      preserve: boolean
+      enabled: boolean
+      body: string
+      confirmed: boolean
+    }
+  | { kind: 'drop-event'; schema: string; name: string; confirmed: boolean }
+  | {
+      kind: 'create-partition'
+      schema: string
+      table: string
+      name: string
+      definition: string
+      confirmed: boolean
+    }
+  | { kind: 'drop-partition'; schema: string; table: string; name: string; confirmed: boolean }

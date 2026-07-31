@@ -16,7 +16,10 @@ export interface DdlGateway {
 export interface DdlAuditEntry {
   actorId: string
   connectionId: string
-  objectType: 'database' | 'schema' | 'table' | 'column' | 'index' | 'constraint'
+  objectType:
+    | 'database' | 'schema' | 'table' | 'column' | 'index' | 'constraint'
+    | 'view' | 'materialized-view' | 'sequence' | 'type' | 'domain' | 'extension'
+    | 'function' | 'procedure' | 'trigger' | 'event' | 'partition'
   objectName: string
   action: DdlCommand['kind']
   statementCount: number
@@ -154,5 +157,35 @@ function describeObject(command: DdlCommand): {
     case 'add-constraint':
     case 'drop-constraint':
       return { type: 'constraint', name: `${command.schema}.${command.table}.${command.name}` }
+    case 'create-view':
+    case 'drop-view':
+      return { type: 'view', name: `${command.schema}.${command.name}` }
+    case 'create-materialized-view':
+    case 'refresh-materialized-view':
+    case 'drop-materialized-view':
+      return { type: 'materialized-view', name: `${command.schema}.${command.name}` }
+    case 'create-sequence':
+    case 'drop-sequence':
+      return { type: 'sequence', name: `${command.schema}.${command.name}` }
+    case 'create-enum':
+    case 'drop-type':
+      return { type: 'type', name: `${command.schema}.${command.name}` }
+    case 'create-domain':
+      return { type: 'domain', name: `${command.schema}.${command.name}` }
+    case 'create-extension':
+    case 'drop-extension':
+      return { type: 'extension', name: command.name }
+    case 'create-routine':
+    case 'drop-routine':
+      return { type: command.routineKind, name: `${command.schema}.${command.name}` }
+    case 'create-trigger':
+    case 'drop-trigger':
+      return { type: 'trigger', name: `${command.schema}.${command.name}` }
+    case 'create-event':
+    case 'drop-event':
+      return { type: 'event', name: `${command.schema}.${command.name}` }
+    case 'create-partition':
+    case 'drop-partition':
+      return { type: 'partition', name: `${command.schema}.${command.name}` }
   }
 }

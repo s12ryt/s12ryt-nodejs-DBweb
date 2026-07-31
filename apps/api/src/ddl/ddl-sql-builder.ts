@@ -10,6 +10,7 @@ import {
 } from './ddl-command.js'
 
 const SAFE_TOKEN = /^[A-Za-z][A-Za-z0-9_]*$/
+const SAFE_VERSION_TOKEN = /^[0-9A-Za-z][0-9A-Za-z._-]*$/
 const MYSQL_ENGINES = new Set(['innodb', 'myisam', 'memory'])
 const DEFAULT_FUNCTIONS = new Map([
   ['current_timestamp', 'CURRENT_TIMESTAMP'],
@@ -130,7 +131,281 @@ export function buildDdlStatements(
       }
       requireCapability(capabilities.constraint[constraintCapabilityKey(command.constraintKind)])
       return [`ALTER TABLE ${qualified(command.schema, command.table)} ${renderMysqlDropConstraint(command.constraintKind, command.name, quote)}`]
+    case 'create-view':
+      requireAdvancedCapability(capabilities, 'view')
+      requireConfirmation(command.confirmed)
+      return [`CREATE${command.replace ? ' OR REPLACE' : ''} VIEW ${qualified(command.schema, command.name)} AS ${rawDefinition(command.query)}`]
+    case 'drop-view':
+      requireAdvancedCapability(capabilities, 'view')
+      requireConfirmation(command.confirmed)
+      if (capabilities.engine === 'mysql' && command.cascade) {
+        throw new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED')
+      }
+      return [`DROP VIEW ${qualified(command.schema, command.name)}${command.cascade ? ' CASCADE' : ''}`]
+    case 'create-materialized-view':
+      requireAdvancedCapability(capabilities, 'materializedView')
+      requireConfirmation(command.confirmed)
+      return [`CREATE MATERIALIZED VIEW ${qualified(command.schema, command.name)} AS ${rawDefinition(command.query)}${command.withData ? '' : ' WITH NO DATA'}`]
+    case 'refresh-materialized-view':
+      requireAdvancedCapability(capabilities, 'materializedView')
+      requireConfirmation(command.confirmed)
+      return [`REFRESH MATERIALIZED VIEW${command.concurrently ? ' CONCURRENTLY' : ''} ${qualified(command.schema, command.name)}`]
+    case 'drop-materialized-view':
+      requireAdvancedCapability(capabilities, 'materializedView')
+      requireConfirmation(command.confirmed)
+      return [`DROP MATERIALIZED VIEW ${qualified(command.schema, command.name)}${command.cascade ? ' CASCADE' : ''}`]
+    case 'create-sequence':
+      requireAdvancedCapability(capabilities, 'sequence')
+      return [renderCreateSequence(command, qualified)]
+    case 'drop-sequence':
+      requireAdvancedCapability(capabilities, 'sequence')
+      requireConfirmation(command.confirmed)
+      return [`DROP SEQUENCE ${qualified(command.schema, command.name)}${command.cascade ? ' CASCADE' : ''}`]
+    case 'create-enum':
+      requireAdvancedCapability(capabilities, 'enum')
+      if (command.values.length === 0 || new Set(command.values).size !== command.values.length) {
+        throw new DdlValidationError('DDL_INVALID_OPTION')
+      }
+      return [`CREATE TYPE ${qualified(command.schema, command.name)} AS ENUM (${command.values.map(validatedStringLiteral).join(', ')})`]
+    case 'create-domain': {
+      requireAdvancedCapability(capabilities, 'domain')
+      if (command.check) requireConfirmation(command.confirmed)
+      const defaultValue = command.default ? ` DEFAULT ${renderDefault(command.default)}` : ''
+      const nullable = command.nullable ? '' : ' NOT NULL'
+      const check = command.check ? ` CHECK (${safeFragment(command.check)})` : ''
+      return [`CREATE DOMAIN ${qualified(command.schema, command.name)} AS ${renderType(capabilities, command.baseType)}${defaultValue}${nullable}${check}`]
+    }
+    case 'drop-type':
+      requireCapability(capabilities.advanced.enum || capabilities.advanced.domain)
+      requireConfirmation(command.confirmed)
+      return [`DROP TYPE ${qualified(command.schema, command.name)}${command.cascade ? ' CASCADE' : ''}`]
+    case 'create-extension': {
+      requireAdvancedCapability(capabilities, 'extension')
+      requireConfirmation(command.confirmed)
+      const schema = command.schema ? ` SCHEMA ${quoteName(command.schema, quote)}` : ''
+      const version = command.version ? ` VERSION ${quoteVersion(command.version)}` : ''
+      return [`CREATE EXTENSION ${quoteName(command.name, quote)}${schema}${version}${command.cascade ? ' CASCADE' : ''}`]
+    }
+    case 'drop-extension':
+      requireAdvancedCapability(capabilities, 'extension')
+      requireConfirmation(command.confirmed)
+      return [`DROP EXTENSION ${quoteName(command.name, quote)}${command.cascade ? ' CASCADE' : ''}`]
+    case 'create-routine':
+      requireAdvancedCapability(capabilities, command.routineKind)
+      requireConfirmation(command.confirmed)
+      return [renderCreateRoutine(capabilities, command, quote, qualified)]
+    case 'drop-routine':
+      requireAdvancedCapability(capabilities, command.routineKind)
+      requireConfirmation(command.confirmed)
+      return [renderDropRoutine(capabilities, command, qualified)]
+    case 'create-trigger':
+      requireAdvancedCapability(capabilities, 'trigger')
+      requireConfirmation(command.confirmed)
+      return [renderCreateTrigger(capabilities, command, quote, qualified)]
+    case 'drop-trigger':
+      requireAdvancedCapability(capabilities, 'trigger')
+      requireConfirmation(command.confirmed)
+      return [capabilities.engine === 'postgres'
+        ? `DROP TRIGGER ${quoteName(command.name, quote)} ON ${qualified(command.schema, command.table)}`
+        : `DROP TRIGGER ${qualified(command.schema, command.name)}`]
+    case 'create-event':
+      requireAdvancedCapability(capabilities, 'event')
+      requireConfirmation(command.confirmed)
+      return [renderCreateEvent(command, qualified)]
+    case 'drop-event':
+      requireAdvancedCapability(capabilities, 'event')
+      requireConfirmation(command.confirmed)
+      return [`DROP EVENT ${qualified(command.schema, command.name)}`]
+    case 'create-partition':
+      requireAdvancedCapability(capabilities, 'partition')
+      requireConfirmation(command.confirmed)
+      return [capabilities.engine === 'postgres'
+        ? `CREATE TABLE ${qualified(command.schema, command.name)} PARTITION OF ${qualified(command.schema, command.table)} ${safeFragment(command.definition)}`
+        : `ALTER TABLE ${qualified(command.schema, command.table)} ADD PARTITION (PARTITION ${quoteName(command.name, quote)} ${safeFragment(command.definition)})`]
+    case 'drop-partition':
+      requireAdvancedCapability(capabilities, 'partition')
+      requireConfirmation(command.confirmed)
+      return [capabilities.engine === 'postgres'
+        ? `DROP TABLE ${qualified(command.schema, command.name)}`
+        : `ALTER TABLE ${qualified(command.schema, command.table)} DROP PARTITION ${quoteName(command.name, quote)}`]
   }
+}
+
+function renderCreateRoutine(
+  capabilities: DdlCapabilities,
+  command: Extract<DdlCommand, { kind: 'create-routine' }>,
+  quote: (value: string) => string,
+  qualified: (schema: string, name: string) => string,
+): string {
+  const routine = command.routineKind.toUpperCase()
+  const argumentsSql = command.arguments
+    .map((argument) => renderRoutineArgument(capabilities, argument, quote))
+    .join(', ')
+  const body = rawDefinition(command.body)
+  if (capabilities.engine === 'postgres') {
+    const language = command.language?.toLowerCase()
+    if (!language || !['sql', 'plpgsql'].includes(language)) {
+      throw new DdlValidationError('DDL_INVALID_OPTION')
+    }
+    if (command.routineKind === 'function' && !command.returns) {
+      throw new DdlValidationError('DDL_INVALID_OPTION')
+    }
+    if (command.routineKind === 'procedure' && (command.returns || command.returnsSet || command.volatility || command.strict)) {
+      throw new DdlValidationError('DDL_INVALID_OPTION')
+    }
+    const returns = command.returns
+      ? ` RETURNS ${command.returnsSet ? 'SETOF ' : ''}${renderType(capabilities, command.returns)}`
+      : ''
+    const volatility = command.volatility ? ` ${command.volatility.toUpperCase()}` : ''
+    const security = command.security ? ` SECURITY ${command.security.toUpperCase()}` : ''
+    const strict = command.strict ? ' STRICT' : ''
+    const delimiter = dollarQuoteFor(body)
+    return `CREATE${command.replace ? ' OR REPLACE' : ''} ${routine} ${qualified(command.schema, command.name)}(${argumentsSql})${returns} LANGUAGE ${language}${volatility}${security}${strict} AS ${delimiter}${body}${delimiter}`
+  }
+
+  if (command.replace || command.language || command.volatility || command.strict || command.returnsSet) {
+    throw new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED')
+  }
+  if (command.routineKind === 'function' && !command.returns) {
+    throw new DdlValidationError('DDL_INVALID_OPTION')
+  }
+  if (command.routineKind === 'procedure' && command.returns) {
+    throw new DdlValidationError('DDL_INVALID_OPTION')
+  }
+  const returns = command.returns ? ` RETURNS ${renderType(capabilities, command.returns)}` : ''
+  const security = command.security ? ` SQL SECURITY ${command.security.toUpperCase()}` : ''
+  return `CREATE ${routine} ${qualified(command.schema, command.name)}(${argumentsSql})${returns}${security} ${body}`
+}
+
+function renderDropRoutine(
+  capabilities: DdlCapabilities,
+  command: Extract<DdlCommand, { kind: 'drop-routine' }>,
+  qualified: (schema: string, name: string) => string,
+): string {
+  const routine = command.routineKind.toUpperCase()
+  if (capabilities.engine === 'mysql') {
+    if (command.argumentTypes.length > 0 || command.cascade) {
+      throw new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED')
+    }
+    return `DROP ${routine} ${qualified(command.schema, command.name)}`
+  }
+  const signature = command.argumentTypes.map((type) => renderType(capabilities, type)).join(', ')
+  return `DROP ${routine} ${qualified(command.schema, command.name)}(${signature})${command.cascade ? ' CASCADE' : ''}`
+}
+
+function renderRoutineArgument(
+  capabilities: DdlCapabilities,
+  argument: import('./ddl-command.js').DdlRoutineArgument,
+  quote: (value: string) => string,
+): string {
+  const mode = argument.mode ? `${argument.mode.toUpperCase()} ` : ''
+  const name = argument.name ? `${quoteName(argument.name, quote)} ` : ''
+  return `${mode}${name}${renderType(capabilities, argument.type)}`
+}
+
+function renderCreateTrigger(
+  capabilities: DdlCapabilities,
+  command: Extract<DdlCommand, { kind: 'create-trigger' }>,
+  quote: (value: string) => string,
+  qualified: (schema: string, name: string) => string,
+): string {
+  if (command.events.length === 0 || new Set(command.events).size !== command.events.length) {
+    throw new DdlValidationError('DDL_INVALID_OPTION')
+  }
+  const timing = command.timing.replace('-', ' ').toUpperCase()
+  const events = command.events.map((event) => event.toUpperCase()).join(' OR ')
+  if (capabilities.engine === 'mysql') {
+    if (command.events.length !== 1 || command.events[0] === 'truncate'
+      || command.timing === 'instead-of' || command.forEach !== 'row'
+      || !command.body || command.functionName || command.functionSchema || command.when) {
+      throw new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED')
+    }
+    return `CREATE TRIGGER ${qualified(command.schema, command.name)} ${timing} ${events} ON ${qualified(command.schema, command.table)} FOR EACH ROW ${rawDefinition(command.body)}`
+  }
+  if (!command.functionName || !command.functionSchema || command.body) {
+    throw new DdlValidationError('DDL_INVALID_OPTION')
+  }
+  const when = command.when ? ` WHEN (${safeFragment(command.when)})` : ''
+  const functionArguments = (command.functionArguments ?? []).map(validatedStringLiteral).join(', ')
+  const executeKeyword = capabilities.version.major >= 11 ? 'FUNCTION' : 'PROCEDURE'
+  return `CREATE TRIGGER ${quoteName(command.name, quote)} ${timing} ${events} ON ${qualified(command.schema, command.table)} FOR EACH ${command.forEach.toUpperCase()}${when} EXECUTE ${executeKeyword} ${qualified(command.functionSchema, command.functionName)}(${functionArguments})`
+}
+
+function renderCreateEvent(
+  command: Extract<DdlCommand, { kind: 'create-event' }>,
+  qualified: (schema: string, name: string) => string,
+): string {
+  const schedule = command.schedule.kind === 'at'
+    ? `AT ${validatedStringLiteral(command.schedule.at)}`
+    : `EVERY ${positiveInteger(command.schedule.amount)} ${command.schedule.unit.toUpperCase()}`
+  return `CREATE EVENT ${qualified(command.schema, command.name)} ON SCHEDULE ${schedule} ON COMPLETION ${command.preserve ? 'PRESERVE' : 'NOT PRESERVE'} ${command.enabled ? 'ENABLE' : 'DISABLE'} DO ${rawDefinition(command.body)}`
+}
+
+function positiveInteger(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) throw new DdlValidationError('DDL_INVALID_OPTION')
+  return value
+}
+
+function dollarQuoteFor(body: string): string {
+  let index = 0
+  while (true) {
+    const delimiter = index === 0 ? '$dbweb$' : `$dbweb${index}$`
+    if (!body.includes(delimiter)) return delimiter
+    index += 1
+  }
+}
+
+function renderCreateSequence(
+  command: Extract<DdlCommand, { kind: 'create-sequence' }>,
+  qualified: (schema: string, name: string) => string,
+): string {
+  const parts = [`CREATE SEQUENCE ${qualified(command.schema, command.name)}`]
+  if (command.increment !== undefined) parts.push(`INCREMENT BY ${sequenceInteger(command.increment, 'nonzero')}`)
+  if (command.minValue !== undefined) parts.push(`MINVALUE ${sequenceInteger(command.minValue, 'any')}`)
+  if (command.maxValue !== undefined) parts.push(`MAXVALUE ${sequenceInteger(command.maxValue, 'any')}`)
+  if (command.start !== undefined) parts.push(`START WITH ${sequenceInteger(command.start, 'any')}`)
+  if (command.cache !== undefined) parts.push(`CACHE ${sequenceInteger(command.cache, 'positive')}`)
+  if (command.cycle) parts.push('CYCLE')
+  if (command.minValue !== undefined && command.maxValue !== undefined && command.minValue >= command.maxValue) {
+    throw new DdlValidationError('DDL_INVALID_OPTION')
+  }
+  return parts.join(' ')
+}
+
+function sequenceInteger(value: number, rule: 'any' | 'nonzero' | 'positive'): number {
+  if (!Number.isSafeInteger(value)
+    || rule === 'nonzero' && value === 0
+    || rule === 'positive' && value < 1) {
+    throw new DdlValidationError('DDL_INVALID_OPTION')
+  }
+  return value
+}
+
+function rawDefinition(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.length > 1_000_000 || trimmed.includes('\0')) {
+    throw new DdlValidationError('DDL_INVALID_FRAGMENT')
+  }
+  return trimmed
+}
+
+function validatedStringLiteral(value: string): string {
+  if (!value || value.length > 10_000 || value.includes('\0')) {
+    throw new DdlValidationError('DDL_INVALID_OPTION')
+  }
+  return quoteString(value)
+}
+
+function quoteVersion(value: string): string {
+  if (!SAFE_VERSION_TOKEN.test(value)) throw new DdlValidationError('DDL_INVALID_OPTION')
+  return quoteString(value)
+}
+
+function requireAdvancedCapability(
+  capabilities: DdlCapabilities,
+  key: keyof DdlCapabilities['advanced'],
+): void {
+  requireCapability(capabilities.advanced[key])
 }
 
 function renderCreateTablePrimaryKey(
