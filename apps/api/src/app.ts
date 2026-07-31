@@ -17,6 +17,8 @@ import {
   type DataMutationRequest,
   type DataMutationService,
 } from './data/data-mutation-service.js'
+import { DdlValidationError, type DdlCommand } from './ddl/ddl-command.js'
+import { DdlServiceError, type DdlService } from './ddl/ddl-service.js'
 import {
   QueryError,
   type ExecuteQueryInput,
@@ -29,6 +31,7 @@ interface BuildAppOptions {
   connectionService?: ConnectionService
   databaseExplorer?: DatabaseExplorer
   dataMutationService?: DataMutationService
+  ddlService?: DdlService
   queryService?: SqlQueryService
   sshKnownHostService?: SshKnownHostService
   csrfSecret: Buffer
@@ -53,6 +56,16 @@ const messages = {
     CONNECTION_NOT_FOUND: 'Connection not found',
     CONFIRMATION_REQUIRED: 'Confirmation required for high-risk SQL',
     DATABASE_CONNECTION_FAILED: 'Database connection failed',
+    DDL_CAPABILITY_UNSUPPORTED: 'DDL capability is not supported by this database version',
+    DDL_COLUMN_DEFINITION_REQUIRED: 'A complete column definition is required',
+    DDL_CONFIRMATION_REQUIRED: 'DDL confirmation required',
+    DDL_FAILED: 'DDL execution failed',
+    DDL_INVALID_DEFAULT: 'Invalid column default',
+    DDL_INVALID_FRAGMENT: 'Invalid SQL fragment',
+    DDL_INVALID_IDENTIFIER: 'Invalid database object name',
+    DDL_INVALID_OPTION: 'Invalid DDL option',
+    DDL_INVALID_TYPE_ARGUMENT: 'Invalid type argument',
+    DDL_TYPE_UNSUPPORTED: 'Column type is not supported by this database version',
     INVALID_CONNECTION: 'Invalid connection settings',
     INVALID_KEEPALIVE_INTERVAL: 'Keepalive interval must be between 1 minute and 24 hours',
     INVALID_SSH_CONFIGURATION: 'Invalid SSH configuration',
@@ -81,6 +94,16 @@ const messages = {
     CONNECTION_NOT_FOUND: '找不到連線設定',
     CONFIRMATION_REQUIRED: '高風險 SQL 需要二次確認',
     DATABASE_CONNECTION_FAILED: '資料庫連線失敗',
+    DDL_CAPABILITY_UNSUPPORTED: '此資料庫版本不支援該 DDL 能力',
+    DDL_COLUMN_DEFINITION_REQUIRED: '需要完整的欄位定義',
+    DDL_CONFIRMATION_REQUIRED: 'DDL 操作需要二次確認',
+    DDL_FAILED: 'DDL 執行失敗',
+    DDL_INVALID_DEFAULT: '欄位預設值無效',
+    DDL_INVALID_FRAGMENT: 'SQL 片段無效',
+    DDL_INVALID_IDENTIFIER: '資料庫物件名稱無效',
+    DDL_INVALID_OPTION: 'DDL 選項無效',
+    DDL_INVALID_TYPE_ARGUMENT: '型別參數無效',
+    DDL_TYPE_UNSUPPORTED: '此資料庫版本不支援該欄位型別',
     INVALID_CONNECTION: '連線設定無效',
     INVALID_KEEPALIVE_INTERVAL: '保活間隔必須介於 1 分鐘到 24 小時',
     INVALID_SSH_CONFIGURATION: 'SSH 設定無效',
@@ -691,6 +714,93 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           schema: request.params.schema,
           table: request.params.table,
           operations: request.body.operations,
+        }))
+      },
+    )
+  }
+
+  if (options.ddlService) {
+    const ddlService = options.ddlService
+    const ddlParamsSchema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id'],
+      properties: { id: { type: 'string', minLength: 1, maxLength: 128 } },
+    } as const
+    const ddlKinds: DdlCommand['kind'][] = [
+      'create-database', 'rename-database', 'drop-database',
+      'create-schema', 'rename-schema', 'drop-schema',
+      'create-table', 'rename-table', 'drop-table',
+      'add-column', 'rename-column', 'drop-column',
+      'create-index', 'drop-index', 'add-constraint', 'drop-constraint',
+    ]
+
+    async function handleDdl(
+      request: FastifyRequest,
+      reply: FastifyReply,
+      action: (actor: AuthUser) => Promise<unknown>,
+    ) {
+      const actor = await authenticate(request, reply)
+      if (!actor) return
+      if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
+      try {
+        return await action(actor)
+      } catch (error) {
+        if (error instanceof ConnectionError) {
+          return sendError(request, reply, 404, error.code)
+        }
+        if (error instanceof DdlValidationError) {
+          return sendError(
+            request,
+            reply,
+            error.code === 'DDL_CONFIRMATION_REQUIRED' ? 409 : 422,
+            error.code,
+          )
+        }
+        if (error instanceof DdlServiceError) {
+          return sendError(request, reply, error.code === 'FORBIDDEN' ? 403 : 502, error.code)
+        }
+        throw error
+      }
+    }
+
+    app.get<{ Params: { id: string } }>(
+      '/api/connections/:id/ddl/capabilities',
+      { schema: { params: ddlParamsSchema } },
+      async (request, reply) => handleDdl(
+        request,
+        reply,
+        (actor) => ddlService.capabilities(actor, request.params.id),
+      ),
+    )
+
+    app.post<{ Params: { id: string }; Body: { command: DdlCommand } }>(
+      '/api/connections/:id/ddl/execute',
+      {
+        schema: {
+          params: ddlParamsSchema,
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['command'],
+            properties: {
+              command: {
+                type: 'object',
+                required: ['kind'],
+                properties: { kind: { type: 'string', enum: ddlKinds } },
+                additionalProperties: true,
+              },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor || !validateCsrf(request, reply)) return
+        if (actor.role !== 'admin') return sendError(request, reply, 403, 'FORBIDDEN')
+        return handleDdl(request, reply, () => ddlService.execute(actor, {
+          connectionId: request.params.id,
+          command: request.body.command,
         }))
       },
     )
