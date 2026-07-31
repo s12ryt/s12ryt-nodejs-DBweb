@@ -49,6 +49,35 @@ export interface RowPage {
   nextOffset: number | null
 }
 
+export type DatabaseValueType = 'array' | 'bigint' | 'binary' | 'boolean' | 'date' | 'datetime' | 'decimal' | 'enum' | 'json' | 'number' | 'string' | 'time' | 'timestamptz' | 'uuid'
+export type TaggedDatabaseValue =
+  | { kind: 'null' }
+  | { kind: 'default' }
+  | { kind: 'value'; type: DatabaseValueType; value: unknown }
+
+export interface MutationColumn {
+  name: string
+  valueType: DatabaseValueType | 'unsupported'
+  nullable: boolean
+  generated: boolean
+}
+
+export interface DataMutationInspection {
+  table: {
+    schema: string
+    name: string
+    columns: MutationColumn[]
+    uniqueKeys: Array<{ name: string; kind: 'primary' | 'unique'; columns: string[] }>
+  }
+  policy: {
+    identity: { name: string; kind: 'primary' | 'unique'; columns: string[] } | null
+    writableColumns: string[]
+    readOnlyColumns: string[]
+    canUpdate: boolean
+    canDelete: boolean
+  }
+}
+
 export interface QueryResult {
   columns: string[]
   rows: Array<Record<string, unknown>>
