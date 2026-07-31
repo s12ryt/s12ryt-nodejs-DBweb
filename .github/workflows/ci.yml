@@ -126,6 +126,8 @@ jobs:
           await connection.query('SET GLOBAL log_bin_trust_function_creators = 1');
           await connection.query(\"GRANT CREATE USER ON *.* TO 'dbweb'@'%' WITH GRANT OPTION\");
           await connection.query(\"GRANT SELECT ON mysql.user TO 'dbweb'@'%'\");
+          await connection.query(\"GRANT SELECT ON mysql.db TO 'dbweb'@'%'\");
+          await connection.query(\"GRANT SELECT ON mysql.tables_priv TO 'dbweb'@'%'\");
           await connection.query(\"GRANT UPDATE ON mysql.* TO 'dbweb'@'%'\");
           await connection.end();"
       - run: pnpm exec vitest run apps/api/src/data/data-mutation.integration.test.ts apps/api/src/ddl/ddl.integration.test.ts apps/api/src/accounts/native-account.integration.test.ts
