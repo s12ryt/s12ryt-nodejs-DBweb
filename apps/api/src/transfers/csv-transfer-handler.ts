@@ -15,7 +15,7 @@ interface CsvPreviewPlanReader {
 
 export interface CsvTransferHandlerDelegate {
   inspect(actor: Actor, job: StoredTransferJob, request: TransferPreviewRequest): Promise<TransferPreviewInspection>
-  execute(actor: Actor, jobId: string, token: string): Promise<unknown>
+  execute(actor: Actor, jobId: string, token: string, signal?: AbortSignal): Promise<unknown>
   cancel(actor: Actor, jobId: string): Promise<StoredTransferJob>
 }
 
@@ -48,7 +48,7 @@ export class CsvTransferHandler implements CsvTransferHandlerDelegate {
     return unsupported()
   }
 
-  async execute(actor: Actor, jobId: string, token: string): Promise<unknown> {
+  async execute(actor: Actor, jobId: string, token: string, signal?: AbortSignal): Promise<unknown> {
     const job = await this.jobs.get(actor, jobId)
     const delegate = job.direction === 'import'
       ? this.exactImport
@@ -56,7 +56,7 @@ export class CsvTransferHandler implements CsvTransferHandlerDelegate {
     if (this.active.has(jobId)) unsupported()
     this.active.set(jobId, delegate)
     try {
-      return await delegate.execute(actor, jobId, token)
+      return await delegate.execute(actor, jobId, token, signal)
     } finally {
       if (this.active.get(jobId) === delegate) this.active.delete(jobId)
     }

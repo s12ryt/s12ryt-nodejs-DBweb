@@ -12,7 +12,7 @@ import type {
 type TransferActor = Pick<AuthUser, 'id' | 'role'>
 
 export interface TransferExecutionHandler<TResult = unknown> {
-  execute(actor: TransferActor, jobId: string, previewToken: string): Promise<TResult>
+  execute(actor: TransferActor, jobId: string, previewToken: string, signal?: AbortSignal): Promise<TResult>
   cancel(actor: TransferActor, jobId: string): Promise<StoredTransferJob>
 }
 
@@ -47,9 +47,14 @@ export class TransferHandlerRouter implements TransferHandler {
     return this.handlerFor(job).inspect(actor, job, request)
   }
 
-  async execute(actor: TransferActor, jobId: string, previewToken: string): Promise<unknown> {
+  async execute(
+    actor: TransferActor,
+    jobId: string,
+    previewToken: string,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     const job = await this.jobs.get(actor, jobId)
-    return this.handlerFor(job).execute(actor, jobId, previewToken)
+    return this.handlerFor(job).execute(actor, jobId, previewToken, signal)
   }
 
   async cancel(actor: TransferActor, jobId: string): Promise<StoredTransferJob> {

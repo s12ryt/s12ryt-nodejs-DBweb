@@ -55,6 +55,24 @@ describe('TransferHandlerRouter', () => {
       new TransferHandlerRouterError('UNSUPPORTED_TRANSFER_HANDLER'),
     )
   })
+
+  it('forwards the worker lease abort signal to the selected handler', async () => {
+    const current = { ...baseJob, format: 'json' as const, direction: 'export' as const }
+    const jsonExport = handler('json-export')
+    const router = new TransferHandlerRouter(
+      { get: vi.fn(async () => current), cancel: vi.fn(async () => current) },
+      {
+        friendlyCsvExport: handler('friendly'),
+        exactJsonExport: jsonExport,
+        exactJsonImport: handler('json-import'),
+      },
+    )
+    const signal = new AbortController().signal
+
+    await router.execute(actor, current.id, 'token', signal)
+
+    expect(jsonExport.execute).toHaveBeenCalledWith(actor, current.id, 'token', signal)
+  })
 })
 
 function handler(name: string) {
