@@ -118,6 +118,13 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Allow nonadministrative stored function integration tests
+        run: >-
+          pnpm --filter @dbweb/api exec node --input-type=module -e
+          "import mysql from 'mysql2/promise';
+          const connection = await mysql.createConnection({ host: '127.0.0.1', port: 3306, user: 'root', password: 'dbweb-root-password' });
+          await connection.query('SET GLOBAL log_bin_trust_function_creators = 1');
+          await connection.end();"
       - run: pnpm exec vitest run apps/api/src/data/data-mutation.integration.test.ts apps/api/src/ddl/ddl.integration.test.ts
         env:
           DBWEB_INTEGRATION_ENGINE: mysql
