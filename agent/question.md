@@ -112,3 +112,41 @@
 - 圖形化資料/結構變更稽核保存 actor、connection、物件識別、動作、受影響列數、成功/失敗與參數化 SQL template；不保存資料列 before/after 值。程式碼型物件原文依既有加密 SQL 稽核與遮蔽規則保存。
 - 真實方言整合測試由 GitHub Actions service containers 執行，核心矩陣固定 PostgreSQL 9.6 與代表性穩定新版、MySQL 5.6 與 8.4 LTS；版本特定功能依 capability 測試。
 - 建立公開 repository `s12ryt/s12ryt-nodejs-DBweb` 並推送原子 commit。不得提交環境主密鑰、真實密碼、SQLite runtime資料或測試產物。
+
+## 第四里程碑帳號與權限契約
+
+### Web 使用者與每連線能力
+
+- 一般使用者按 connection 分配固定六項能力：結構瀏覽、資料讀取、唯讀 SQL、資料寫入、結構 DDL、原生帳號權限管理。管理員永遠具有全部能力，且只有管理員可配置其他 Web 使用者的 connection 能力。
+- 未分配的 connection 對一般使用者完全不可見。新分配預設授予結構瀏覽、資料讀取與唯讀 SQL；M4 migration 對既有非管理員不自動分配任何既有 connection。
+- 權限相依自動補齊：資料讀取包含結構瀏覽；資料寫入包含結構瀏覽與資料讀取；結構 DDL 包含結構瀏覽；原生帳號權限管理維持獨立。
+- 權限不固化於 session；每個受保護請求即時讀取 metadata，撤銷後下一個請求立即生效。唯讀 SQL 先拒絕多語句與明顯寫入/DDL，再由 PostgreSQL/MySQL 唯讀交易提供第二層限制。
+- Web 使用者支援啟用/停用、admin/user 升降級、管理員重設密碼與永久刪除。停用、角色變更、密碼重設與刪除立即撤銷該使用者全部 session；不得停用、降級或刪除最後一位可用管理員。
+- 管理員可產生 20 字元臨時密碼或手動輸入至少 12 字元密碼；臨時密碼只在當次回應顯示，使用者下次登入必須先更改密碼才能使用其他功能。
+- 永久刪除 Web 使用者時刪除 session 與 connection 權限，保留匿名化安全稽核中的不可登入 user ID，不保存可登入資料且不可復原。
+
+### 原生 PostgreSQL/MySQL 帳號
+
+- 原生帳號與 Web 使用者完全獨立，不建立所有權關聯。列表即時讀取資料庫內全部帳號與實際授權；外部帳號亦可由具權限操作者管理，但在輪替密碼納管前不得查看連線詳情或執行背景憑證驗證。
+- PostgreSQL 以 role name 識別；MySQL 以 `user@host` 識別。MySQL host 預設 `%`，允許 IP、hostname 與 `%`/`_` pattern，拒絕 NUL、控制字元及語法注入，UI 明確警告 `%` 的廣泛來源範圍。
+- 可配置一般帳號屬性：登入/停用、密碼到期、連線上限及 MySQL host pattern，依 server version capability 開放。首版不提供 PostgreSQL CREATEDB/CREATEROLE/BYPASSRLS/SUPERUSER，亦不提供 MySQL CREATE USER/GRANT OPTION/SUPER/SYSTEM_USER/FILE 等管理或主機級屬性。
+- 永遠保護目前 DBWeb connection 使用的帳號、PostgreSQL 預定義/超級使用者及 MySQL 系統帳號；這些帳號只可檢視，不可由 DBWeb 修改、輪替、停用或刪除。
+- 密碼預設由系統產生 32 字元高強度值，也允許管理員輸入至少 16 字元；以環境主密鑰和帳號用途綁定加密保存。管理員每次重看保存密碼前必須重新輸入本人 Web 密碼，成功後只回傳一次並寫安全稽核。
+- 具「原生帳號權限管理」能力的一般使用者可建立、納管輪替、停用、刪除、復原及管理 grants，但完全不可看到新密碼或已保存密碼；只有管理員可在操作當次及重新驗證後查看密碼。
+- 受管帳號可設定每 1 小時至 7 天的背景登入驗證週期，預設 6 小時；每個 connection 最多 5 個並行。失敗 30 分鐘後只重試一次，再失敗即標記 credential stale，直到下一正常週期、手動測試或輪替成功。
+- 每個受管帳號指定一個驗證 database，預設為 connection 原 database。SSH connection 的連線資訊顯示 DB host/port/database/user/password及SSH host/port/username，但永不顯示DBWeb保存的SSH密碼，並提示SSH憑證需另行取得。
+
+### 原生授權、跨資料庫與生命週期
+
+- 原生授權採白名單，涵蓋連線/使用（PostgreSQL CONNECT、schema USAGE）、資料操作（SELECT、INSERT、UPDATE、DELETE）及依方言/層級合法的結構操作（CREATE、ALTER、DROP、INDEX、REFERENCES）；不提供 EXECUTE 或 WITH GRANT OPTION。
+- 管理員手動輸入同一 server 的目標 database 名稱；PostgreSQL以既有connection憑證、TLS與SSH建立目標database暫時連線，MySQL以同server連線及完整限定名稱操作。排除且禁止操作PostgreSQL `template0`/`template1`與MySQL `mysql`/`information_schema`/`performance_schema`/`sys`。
+- 支援database、schema與table層授予/撤銷。列表與詳情每次以資料庫實際帳號及 grants 為準；metadata只保存加密憑證、驗證排程、管理狀態與刪除快照，不把預期 grants 當成第二真相。
+- 建立、停用、刪除、復原與批次 REVOKE 均需摘要與二次確認。若帳號仍擁有物件或存在資料庫拒絕的依賴，安全失敗並回摘要；不得自動 `REASSIGN OWNED`、`DROP OWNED`、級聯或強制刪除。
+- PostgreSQL可交易的帳號與授權操作盡量整體回滾；MySQL DCL/帳號操作依真實非原子語意逐步執行、失敗即停、逐步稽核並回 partial failure，之後重新讀取實際狀態，不做不可靠的應用層補償。
+- 刪除受管帳號後保留停用紀錄、加密密碼與一般帳號屬性 14 天，二次確認後可用相同帳號與密碼重建，但不恢復 grants；外部未納管帳號保留非敏感屬性 14 天，復原時必須產生或輸入新密碼。名稱已被占用或依賴不成立時安全失敗。14 天後清除可解密密碼與復原資料，只保留安全稽核。
+
+### 安全、稽核與驗收
+
+- M4安全稽核記錄登入重新驗證、密碼查看、Web權限變更、帳號建立/納管/輪替/停用/刪除/復原、GRANT/REVOKE、背景驗證及成功/失敗狀態，保存 365 天。密碼永不寫入稽核、錯誤或一般API；SQL template依既有AES-GCM與憑證遮蔽邊界加密保存。
+- 敏感帳號操作維持登入、CSRF、即時能力檢查、限速與安全錯誤；driver訊息、密碼hash、加密密文及DB/SSH秘密不得洩漏。管理員密碼重新驗證不得建立新的長效提升權限，只授權單次密碼查看。
+- 完成條件沿用 PostgreSQL 9.6/17、MySQL 5.6/8.4 真實整合矩陣；Chromium、Firefox、WebKit E2E涵蓋Web授權即時生效，以及原生帳號建立、納管輪替、查看、停用、刪除/復原與grant/revoke核心流程。Docker build、單元/整合測試、lint、strict typecheck及production build必須全綠。
