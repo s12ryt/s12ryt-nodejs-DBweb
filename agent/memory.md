@@ -43,3 +43,5 @@
 - M3C 推送前本機驗證：Vitest 47 files通過、2 files略過，173 tests通過、6 cases略過；ESLint、workspace strict typecheck、production build及Chromium/Firefox/WebKit核心E2E全綠。
 - M3C首次遠端run `30601615401` 僅MySQL 8.4失敗：binary logging拒絕未宣告`DETERMINISTIC`、`NO SQL`或`READS SQL DATA`的stored function；MySQL 5.6與其餘jobs全綠。依MySQL 8.4官方文件補單元RED，將routine deterministic/data access建模為列舉欄位，MySQL function強制符合至少一項安全聲明，並同步前端與真實integration fixture。
 - 將 Vitest `maxWorkers` 設為2，修復多個正式Argon2 HTTP測試平行競爭造成的5秒逾時；單檔與限制worker後完整測試均通過，產品Argon2設定未變。
+- M3C第二次run `30602275693` 的MySQL 8.4仍失敗；新增只存在integration test的driver診斷後，run `30602542105`取得`ER_BINLOG_CREATE_ROUTINE_NEED_SUPER`，確認SQL已有`DETERMINISTIC NO SQL`，失敗源於MySQL 8.4 binary logging的全域權限政策，而非builder語法。
+- MySQL CI矩陣由root設定測試專用`log_bin_trust_function_creators=1`後，再由一般`dbweb`帳號執行routine與其餘DDL；正式gateway仍遮蔽driver細節。最終run `30602738639`的quality、Docker、三瀏覽器、PostgreSQL 9.6/17及MySQL 5.6/8.4全部通過，M3C與里程碑三完成。
