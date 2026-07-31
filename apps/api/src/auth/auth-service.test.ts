@@ -58,6 +58,21 @@ describe('AuthService', () => {
     )
   })
 
+  it('只為啟用中的本人帳號驗證單次敏感操作密碼', async () => {
+    const { service } = setup()
+    const admin = await service.createUser({
+      username: 'admin', password: 'correct horse battery staple', role: 'admin',
+    })
+    const user = await service.createUser({
+      username: 'operator', password: 'operator password value', role: 'user',
+    })
+    await expect(service.verifyOwnPassword(admin.id, 'correct horse battery staple')).resolves.toBe(true)
+    await expect(service.verifyOwnPassword(admin.id, 'wrong password')).resolves.toBe(false)
+    await service.setUserEnabled(admin, user.id, false)
+    await expect(service.verifyOwnPassword(user.id, 'operator password value')).resolves.toBe(false)
+    await expect(service.verifyOwnPassword('missing-user', 'correct horse battery staple')).resolves.toBe(false)
+  })
+
   it('拒絕重複帳號與少於 12 個字元的密碼', async () => {
     const { service } = setup()
 

@@ -160,6 +160,12 @@ export class AuthService {
     return { sessionId: session.id, token, user: toAuthUser(user) }
   }
 
+  async verifyOwnPassword(userId: string, password: string): Promise<boolean> {
+    const user = await this.repository.findUserById(userId)
+    if (!user?.enabled) return false
+    return await argon2.verify(user.passwordHash, password)
+  }
+
   async authenticate(token: string): Promise<AuthUser> {
     const session = await this.repository.findSessionByTokenHash(hashToken(token))
     if (!session) {
