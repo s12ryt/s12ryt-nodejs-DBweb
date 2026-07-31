@@ -39,6 +39,29 @@ export interface ConnectionProfile {
   createdAt: string
 }
 
+export type NativeAccountIdentity =
+  | { engine: 'postgres'; username: string }
+  | { engine: 'mysql'; username: string; host: string }
+
+export interface NativeAccount {
+  identity: NativeAccountIdentity
+  canLogin: boolean
+  passwordExpired: boolean
+  connectionLimit: number
+  systemAccount: boolean
+  managed: boolean
+  managedAccountId?: string
+  protected: boolean
+  protectionReason?: 'connection-account' | 'system-account'
+  managedStatus?: 'active' | 'disabled' | 'credential-stale' | 'deleted'
+  recoverUntil?: string
+}
+
+export interface NativeAccountResult {
+  account: NativeAccount
+  password?: string
+}
+
 export interface DatabaseTable {
   schema: string
   name: string
