@@ -11,7 +11,8 @@
 - [x] 完成里程碑二：SSH Tunnel 與 TOFU。
 - [x] 完成里程碑三：M3A 資料 CRUD、M3B 核心 DDL、M3C 進階資料庫物件。
 - [x] 完成里程碑四 A：Web 使用者生命週期與每 connection 即時能力授權。
-- [ ] 完成里程碑四 B/C：原生 DB 帳號、跨 database 權限與完整驗收。
+- [x] 完成里程碑四 B：原生 DB 帳號、加密憑證、背景驗證與生命週期。
+- [ ] 完成里程碑四 C：跨 database 權限與完整驗收。
 - [ ] 完成里程碑五：CSV/JSON/SQL dump 匯入匯出。
 - [ ] 完成里程碑六：多實例、效能、安全與完整回歸。
 
@@ -54,3 +55,7 @@
 - 2026-07-31：M4A 完成六項 Web capability、未授權 connection 隱藏與逐請求 metadata 驗權；一般使用者 SQL 同時經語句分類器及 PostgreSQL/MySQL 唯讀交易防護，資料異動與 DDL 在 HTTP/service 兩層授權。
 - 2026-07-31：M4A 完成 Web 使用者停啟、角色升降、臨時密碼、強制改密碼、重設與永久刪除；所有敏感狀態變更撤銷 sessions，最後可用管理員由 metadata transaction lock 保護。
 - 2026-07-31：M4A 安全事件以 AES-GCM 保存 365 天且不記錄密碼；前端完成使用者生命週期與六能力矩陣，並修正共用 dialog 重複 heading ID。完整本機驗證為 52 個 Vitest 檔、215 tests 通過、6 個無本機 DB cases 略過，lint、strict typecheck、production build 與三瀏覽器核心 E2E 全綠。
+- 2026-07-31：M4B 完成 PostgreSQL role 與 MySQL user@host 的實際帳號列舉、保護規則、受限建立、納管輪替、停啟、手動驗證、刪除與 14 天無 grants 復原；連線帳號與系統帳號維持只讀保護。
+- 2026-07-31：原生帳號密碼預設生成 32 字元並以 account ID 綁定 AES-GCM 密文保存；管理員須用本人 Web 密碼單次重驗才可查看，一般 account manager 永不取得明文。所有生命週期及驗證事件納入 365 天安全稽核且不保存密碼或 driver 錯誤。
+- 2026-07-31：背景憑證驗證依 connection 最多五筆並行，預設每六小時；第一次失敗 30 分鐘後重試一次，第二次標記 credential-stale。scheduler 防重疊並在 runtime 關閉時等待 in-flight tick。
+- 2026-07-31：M4B 前端完成原生帳號建立、納管、輪替、立即驗證、停啟、刪除復原及管理員重驗查看密碼；受保護帳號不顯示危險操作，一次性密碼只存在 React 暫時狀態。前端行為 20/20、M4B targeted 後端 46/46 通過；四版本真實帳號生命週期已加入 CI，等待遠端驗證。

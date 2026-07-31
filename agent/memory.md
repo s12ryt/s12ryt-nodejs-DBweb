@@ -51,3 +51,8 @@
 - 依 RED -> GREEN 完成 Web 使用者停啟、角色升降、20 字元生成臨時密碼、強制首次改密碼、管理員重設與永久刪除；狀態、角色與密碼變更均撤銷全部 sessions，metadata transaction lock 防止並行操作移除最後可用管理員。
 - 新增 365 天 AES-GCM security audit，保存 Web 使用者與授權事件但型別及資料表均不接受密碼；刪除使用者後仍保留不可登入的 target ID。
 - 完成雙語使用者與權限工作台、一次性臨時密碼顯示、生命週期控制與六能力矩陣；修正使用者列 accessible name及共用 Modal 重複heading ID。M4A本機驗證：Vitest 52 files/215 tests、6 integration cases skipped，ESLint、workspace strict typecheck、production build與Chromium/Firefox/WebKit核心E2E全綠。
+- 依 RED -> GREEN 完成 M4B 原生帳號 policy、32 字元憑證生成與 account ID 綁定 AES-GCM vault；PostgreSQL role 與 MySQL user@host identity 不碰撞，connection/system account 受到只讀保護。
+- 完成受限原生帳號建立、外部帳號輪替納管、密碼輪替、停啟、手動驗證、刪除後 14 天復原及過期敏感 metadata 清理；復原不還原 grants，管理員單次查看密碼需本人 Argon2id Web 密碼重驗。
+- 完成 PostgreSQL 9.6+ 與 MySQL 5.6/8.4 版本化 gateway；MySQL 5.6 以不可知隨機密碼模擬停用並於啟用時恢復受管密碼，新版使用 ACCOUNT LOCK。所有 driver 錯誤維持安全 `NATIVE_ACCOUNT_FAILED`。
+- 完成背景憑證驗證與 scheduler：每 connection 最多五並行，第一次失敗 30 分鐘重試，第二次標記 stale，正常週期可恢復；排程停止會等待進行中 tick，驗證及生命週期事件寫入 365 天加密 security audit。
+- 完成原生帳號 HTTP/runtime 組裝與雙語前端工作台；受保護帳號無危險控制，管理員密碼只顯示於暫時 React state。App tests 20/20、M4B targeted 後端 46/46、API/Web strict typecheck與lint通過。新增四版本真實帳號建立、輪替、停啟、驗證與刪除 integration，MySQL CI前置只授予一般測試帳號必要的CREATE USER及mysql.user讀寫權限，待GitHub Actions實跑。
