@@ -11,9 +11,10 @@ import {
   type SqlRestoreExecutionGateway,
   type SqlRestoreSession,
 } from './sql-restore-service.js'
+import type { SqlDumpObject } from './sql-dump-manifest.js'
 
 export interface MysqlSqlRestoreConnection {
-  query(sql: string): Promise<[unknown, unknown]>
+  query(sql: string, values?: unknown[]): Promise<[unknown, unknown]>
   end(): Promise<void>
 }
 
@@ -23,7 +24,7 @@ export type MysqlSqlRestoreConnectionFactory = (
 
 export type MysqlSqlRestoreDataLoader = (
   client: MysqlSqlRestoreConnection,
-  objectId: string,
+  object: SqlDumpObject,
   entryPath: string,
   content: AsyncIterable<Buffer>,
   signal: AbortSignal,
@@ -87,14 +88,14 @@ class MysqlSqlRestoreSession implements SqlRestoreSession {
   }
 
   async restoreData(
-    objectId: string,
+    object: SqlDumpObject,
     entryPath: string,
     content: AsyncIterable<Buffer>,
     signal: AbortSignal,
   ): Promise<void> {
     if (signal.aborted) throw new SqlRestoreExecutionError('RESTORE_CANCELLED', this.applied)
     try {
-      await this.loadData(this.client, objectId, entryPath, content, signal)
+      await this.loadData(this.client, object, entryPath, content, signal)
       this.applied += 1
     } catch (error) {
       if (error instanceof SqlRestoreExecutionError && error.code === 'RESTORE_CANCELLED') throw error

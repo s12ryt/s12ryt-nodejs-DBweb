@@ -11,10 +11,11 @@ import {
   type SqlRestoreExecutionGateway,
   type SqlRestoreSession,
 } from './sql-restore-service.js'
+import type { SqlDumpObject } from './sql-dump-manifest.js'
 
 export type PostgresSqlRestoreDataLoader = (
   client: PostgresClientLike,
-  objectId: string,
+  object: SqlDumpObject,
   entryPath: string,
   content: AsyncIterable<Buffer>,
   signal: AbortSignal,
@@ -75,14 +76,14 @@ class PostgresSqlRestoreSession implements SqlRestoreSession {
   }
 
   async restoreData(
-    objectId: string,
+    object: SqlDumpObject,
     entryPath: string,
     content: AsyncIterable<Buffer>,
     signal: AbortSignal,
   ): Promise<void> {
     if (signal.aborted) throw new SqlRestoreExecutionError('RESTORE_CANCELLED', this.applied)
     try {
-      await this.loadData(this.client, objectId, entryPath, content, signal)
+      await this.loadData(this.client, object, entryPath, content, signal)
       this.applied += 1
     } catch (error) {
       if (error instanceof SqlRestoreExecutionError && error.code === 'RESTORE_CANCELLED') throw error

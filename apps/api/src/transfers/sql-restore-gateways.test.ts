@@ -23,10 +23,10 @@ describe('SQL restore execution gateways', () => {
       }),
       end: vi.fn(async () => undefined),
     }
-    const loadData = vi.fn(async (_client, objectId: string, entryPath: string, content: AsyncIterable<Buffer>) => {
+    const loadData = vi.fn(async (_client, object, entryPath: string, content: AsyncIterable<Buffer>) => {
       let value = ''
       for await (const chunk of content) value += chunk.toString('utf8')
-      queries.push(`DATA ${objectId} ${entryPath} ${value}`)
+      queries.push(`DATA ${object.id} ${entryPath} ${value}`)
     })
     const createClient = vi.fn<PostgresClientFactory>(() => client as never)
     const gateway = new PostgresSqlRestoreGateway(createClient, undefined, loadData)
@@ -34,7 +34,7 @@ describe('SQL restore execution gateways', () => {
 
     await session.begin()
     await session.executeStatement('CREATE TABLE example(id bigint)', new AbortController().signal)
-    await session.restoreData('table:public.example', 'data/example.ndjson', chunks('row'), new AbortController().signal)
+    await session.restoreData(tableObject(), 'data/example.ndjson', chunks('row'), new AbortController().signal)
     await session.commit()
     await session.close()
 
@@ -119,4 +119,15 @@ function connection(engine: 'postgres' | 'mysql', ssh = false): ResolvedConnecti
 
 async function* chunks(value: string): AsyncIterable<Buffer> {
   yield Buffer.from(value)
+}
+
+function tableObject() {
+  return {
+    id: 'table:public.example', kind: 'table' as const, schema: 'public', name: 'example', dependencies: [],
+    createCommands: [{
+      kind: 'create-table' as const, schema: 'public', name: 'example',
+      columns: [{ name: 'id', type: { name: 'bigint' }, nullable: false }],
+    }],
+    dropCommand: { kind: 'drop-table' as const, schema: 'public', name: 'example', confirmed: true },
+  }
 }
