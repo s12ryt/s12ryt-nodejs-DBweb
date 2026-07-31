@@ -14,6 +14,8 @@ export type SecurityAuditAction =
   | 'native-account-password-rotate'
   | 'native-account-restore'
   | 'native-account-verification'
+  | 'native-grant'
+  | 'native-revoke'
   | 'password-change'
   | 'password-reset'
   | 'web-access-assign'
@@ -31,6 +33,10 @@ export interface SecurityAuditDetails {
   nativeAccountId?: string
   nativeIdentity?: string
   verificationStatus?: 'success' | 'retry-scheduled' | 'credential-stale'
+  targetDatabase?: string
+  sqlTemplates?: string[]
+  appliedCount?: number
+  failedIndex?: number
 }
 
 export interface SecurityAuditEvent {
