@@ -463,6 +463,44 @@ describe('DBWeb application shell', () => {
       confirmed: true,
     } }]))
   })
+
+  it('builds MySQL functions with replication-safe routine characteristics', async () => {
+    const ddlBodies: unknown[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([mysqlConnection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url.endsWith('/ddl/capabilities')) return Response.json(mysql84DdlCapabilities)
+      if (url.endsWith('/ddl/execute')) {
+        ddlBodies.push(JSON.parse(String(init?.body)))
+        return Response.json({ statementsExecuted: 1, transactional: false })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText('Primary MySQL'))
+    await user.click(screen.getByRole('tab', { name: '結構' }))
+    await screen.findByText('MySQL 8.4.6')
+    await user.selectOptions(screen.getByLabelText('DDL 操作'), 'create-routine')
+    await user.selectOptions(screen.getByLabelText('Routine 類型'), 'function')
+    await user.type(screen.getByLabelText('Schema 名稱'), 'inventory')
+    await user.type(screen.getByLabelText('名稱'), 'constant_value')
+    await user.type(screen.getByLabelText('回傳型別'), 'int')
+    await user.click(screen.getByLabelText('確定性'))
+    await user.selectOptions(screen.getByLabelText('資料存取'), 'no-sql')
+    await user.type(screen.getByLabelText('程式碼原文'), 'RETURN 7')
+    await user.click(screen.getByRole('button', { name: '執行 DDL' }))
+    await user.click(within(screen.getByRole('dialog', { name: '確認結構變更' })).getByRole('button', { name: '刪除' }))
+
+    await waitFor(() => expect(ddlBodies).toEqual([{ command: {
+      kind: 'create-routine', routineKind: 'function', schema: 'inventory', name: 'constant_value',
+      arguments: [], returns: { name: 'int' }, body: 'RETURN 7', deterministic: true,
+      dataAccess: 'no-sql', confirmed: true,
+    } }]))
+  })
 })
 
 const authenticatedSession = {
@@ -488,6 +526,13 @@ const sshConnection = {
   ...connection,
   name: 'Remote PostgreSQL',
   ssh: { enabled: true as const, host: 'ssh.example.test', port: 2222, username: 'operator' },
+}
+
+const mysqlConnection = {
+  ...connection,
+  name: 'Primary MySQL',
+  engine: 'mysql' as const,
+  port: 3306,
 }
 
 const productMutationInspection = {
@@ -531,6 +576,23 @@ const postgres96DdlCapabilities = {
   ...postgresDdlCapabilities,
   version: { major: 9, minor: 6, patch: 24, assumedMinimum: false },
   advanced: { ...postgresDdlCapabilities.advanced, procedure: false, partition: false },
+}
+
+const mysql84DdlCapabilities = {
+  ...postgresDdlCapabilities,
+  engine: 'mysql',
+  version: { major: 8, minor: 4, patch: 6, assumedMinimum: false },
+  transactionalDdl: false,
+  columnTypes: ['bigint', 'int', 'varchar'],
+  database: { create: true, drop: true, rename: false, owner: false },
+  schema: { create: true, drop: true, rename: false, owner: false, databaseAlias: true },
+  table: { create: true, drop: true, rename: true, owner: false, storageOptions: true },
+  column: { generated: true, identity: true, rename: true, renameSyntax: 'rename-column' },
+  index: { methods: ['btree', 'hash', 'fulltext'], expression: false, partial: false, prefixLength: true },
+  advanced: {
+    view: true, materializedView: false, sequence: false, enum: false, domain: false,
+    function: true, procedure: true, trigger: true, partition: true, extension: false, event: true,
+  },
 }
 
 const productOriginal = {
