@@ -71,3 +71,7 @@
 - 完成90天AES-GCM transfer audit，記job建立、upload complete、preview、取消與download，details型別不接受原始資料、檔名或密碼；SQLite raw file無checksum/details明文。
 - 完成雙語transfer工作台：建立/列出/取消job、安全下載、查既有chunks後略過相同段、逐段PUT與整檔complete。M5A完整本機驗證：Vitest 74 files通過、3 integration files略過，300 tests通過、10 cases略過；ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases按設定略過。
 - M5A以15筆English plain原子提交推送main；GitHub Actions run `30627658026` 的quality、Docker、三瀏覽器、PostgreSQL 9.6/17及MySQL 5.6/8.4全部通過。僅GitHub官方actions v4的Node 20 runtime淘汰提醒，非產品失敗。
+- 依RED -> GREEN完成M5B格式與安全核心：精確tagged NDJSON/CSV、友善CSV公式注入防護、參數化filter、欄位映射、衝突/交易/續傳策略，以及只接受regular files並限制解壓後大小的ustar/gzip封裝。
+- 新增`pg-cursor`與固定型別，完成PostgreSQL repeatable read-only cursor及MySQL consistent read-only query stream；提早停止、取消與driver failure會rollback/close/end並釋放SSH socket，資料逐列轉tagged values。
+- 完成固定分段output writer與友善CSV export service；output、audit、job狀態任一步失敗均刪除partial artifact並回安全錯誤。preview plan另以AES-GCM綁定job保存30分鐘，執行token不接受client自行聲稱fingerprint，公開結果不回傳plan。
+- M5B基礎 targeted驗證為13 files/47 tests；當時完整本機回歸為84 files、342 tests通過，lint、strict typecheck及production build全綠。CSV/JSON實際preview/executor、import批次/續傳與四版本roundtrip尚未完成。

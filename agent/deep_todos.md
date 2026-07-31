@@ -73,3 +73,6 @@
 - 2026-07-31：完成受信任 inspector 驅動的 30 分鐘 preview token 核心、安全串流下載、90 天加密 transfer audit、逐請求能力驗證與 runtime cleanup scheduler；CSV/JSON 與 SQL 的實際 inspector 分別留在 M5B/M5C 接入。
 - 2026-07-31：雙語 transfer 工作台可建立、列出、取消、下載及以增量 SHA-256 分段上傳；M5A 本機驗證為 74 個 Vitest 檔通過、3 個 integration 檔略過，300 tests 通過、10 cases 略過，lint、strict typecheck、production build 與三瀏覽器既有 E2E 全綠。
 - 2026-07-31：M5A 以 15 筆原子提交推送；GitHub Actions run `30627658026` 的 quality、Docker image、browser、PostgreSQL 9.6/17 與 MySQL 5.6/8.4 全綠，M5A 完成並直接進入 M5B。
+- 2026-07-31：M5B 第一階段完成精確 tagged JSON/CSV 串流格式、友善 CSV 與公式注入防護、結構化 AND-only filter、欄位映射、衝突/交易/續傳策略及受限 ustar/gzip 封裝；所有來源值與 filter 均維持型別驗證及參數化邊界。
+- 2026-07-31：完成 PostgreSQL repeatable read-only cursor 與 MySQL consistent read-only snapshot 串流 gateway、固定分段 output writer及友善 CSV export orchestration；中途取消、提早停止、driver/audit失敗皆清除partial output並安全關閉交易與SSH channel。
+- 2026-07-31：preview inspector產生的不可變執行plan以job綁定AES-GCM保存30分鐘，token與source/mapping/strategy/target/capability/schema fingerprint共同驗證；公開preview回應只含token、估算與遮蔽issues。M5B基礎 targeted為13 files/47 tests，完整回歸為84 files、342 tests通過；實際CSV/JSON executor、import與四版本roundtrip仍在進行。
