@@ -71,24 +71,20 @@ describe.runIf(engine === 'postgres')('PostgreSQL native account integration', (
 
 describe.runIf(engine === 'mysql')('MySQL native account integration', () => {
   const gateway = new MysqlNativeAccountGateway()
-  const identity = { engine: 'mysql' as const, username: 'dbweb_native_test', host: '%' }
+  const identity = { engine: 'mysql' as const, username: 'dbweb_nat_test', host: '%' }
   const initialPassword = 'dbweb-native-initial-password'
   const rotatedPassword = 'dbweb-native-rotated-password'
 
   it('creates, rotates, disables, enables, verifies, and deletes a restricted account', async () => {
     await dropMysqlTestAccount()
     try {
-      try {
-        await gateway.createAccount(connection, {
-          identity,
-          password: initialPassword,
-          canLogin: true,
-          connectionLimit: 2,
-        })
-      } catch (error) {
-        await diagnoseMysqlCreateAccount(error)
-      }
-      await mysqlAdminQuery(`GRANT SELECT ON \`${database.replaceAll('`', '``')}\`.* TO 'dbweb_native_test'@'%'`)
+      await gateway.createAccount(connection, {
+        identity,
+        password: initialPassword,
+        canLogin: true,
+        connectionLimit: 2,
+      })
+      await mysqlAdminQuery(`GRANT SELECT ON \`${database.replaceAll('`', '``')}\`.* TO 'dbweb_nat_test'@'%'`)
       expect(await gateway.listAccounts(connection)).toEqual(expect.arrayContaining([
         expect.objectContaining({ identity, canLogin: true, connectionLimit: 2, systemAccount: false }),
       ]))
@@ -133,31 +129,11 @@ async function mysqlAdminQuery(sql: string): Promise<Array<Record<string, unknow
   } finally { await client.end() }
 }
 
-async function diagnoseMysqlCreateAccount(cause: unknown): Promise<never> {
-  const client = await mysql.createConnection({ host, port, database, user: username, password })
-  try {
-    await client.query(
-      "CREATE USER 'dbweb_native_test'@'%' IDENTIFIED BY 'dbweb-native-initial-password' WITH MAX_USER_CONNECTIONS 2",
-    )
-  } catch (error) {
-    const diagnostic = error as { code?: unknown; errno?: unknown; sqlState?: unknown; message?: unknown }
-    throw new Error(JSON.stringify({
-      code: diagnostic.code,
-      errno: diagnostic.errno,
-      sqlState: diagnostic.sqlState,
-      message: diagnostic.message,
-    }), { cause: error })
-  } finally {
-    await client.end()
-  }
-  throw cause
-}
-
 async function dropMysqlTestAccount(): Promise<void> {
   const rows = await mysqlAdminQuery(
-    "SELECT COUNT(*) AS dbweb_count FROM mysql.user WHERE User = 'dbweb_native_test' AND Host = '%'",
+    "SELECT COUNT(*) AS dbweb_count FROM mysql.user WHERE User = 'dbweb_nat_test' AND Host = '%'",
   )
   if (Number(rows[0]?.dbweb_count) > 0) {
-    await mysqlAdminQuery("DROP USER 'dbweb_native_test'@'%'")
+    await mysqlAdminQuery("DROP USER 'dbweb_nat_test'@'%'")
   }
 }

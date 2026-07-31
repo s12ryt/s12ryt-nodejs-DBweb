@@ -114,6 +114,16 @@ describe('MysqlNativeAccountGateway', () => {
         systemAccount: false,
       }),
     ])
+    await gateway.createAccount(mysqlConnection, {
+      identity: { engine: 'mysql', username: 'dbweb_nat_test', host: '%' },
+      password: 'strong-password-value',
+      canLogin: true,
+      connectionLimit: 2,
+    })
+    expect(query).toHaveBeenLastCalledWith(
+      "CREATE USER 'dbweb_nat_test'@'%' IDENTIFIED BY 'strong-password-value' WITH MAX_USER_CONNECTIONS 2",
+    )
+
     await gateway.rotatePassword(
       mysqlConnection,
       { engine: 'mysql', username: 'reporter', host: '10.%' },
