@@ -61,4 +61,5 @@
 - 依 RED -> GREEN 完成 M4C native grant planner與service：依PG/MySQL、database/schema/table層級限制白名單，拒絕system database、EXECUTE、GRANT OPTION、跨database batch及未確認REVOKE；每請求即時檢查`account-manage`並重新確認actual account與保護狀態。
 - PostgreSQL grant gateway由目標database暫時連線讀取pg_catalog direct ACL，整批交易失敗rollback；MySQL由`mysql.db`/`mysql.tables_priv`結構化讀actual grants，逐句執行且失敗回安全appliedCount/failedIndex、不補償已完成步驟。安全audit保存加密SQL templates且不記密碼或driver錯誤。
 - 完成雙語原生權限工作台：手動目標database、實際權限讀取、方言與scope白名單、GRANT及REVOKE確認；App tests 21/21，Chromium/Firefox/WebKit授權流程全綠。
-- M4C本機完整驗證：Vitest 62 files通過、3 integration files略過，264 tests通過、10個無本機DB cases略過；ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases按設定略過。四版本真實grant integration已加入既有native account矩陣，等待GitHub Actions。
+- M4C本機完整驗證：Vitest 62 files通過、3 integration files略過，264 tests通過、10個無本機DB cases略過；ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases按設定略過。
+- M4C首次GitHub Actions run `30619429165` 的MySQL 5.6/8.4由actual grant讀取精準發現管理連線缺少`mysql.db`與`mysql.tables_priv` SELECT；只補兩張目錄表的最小讀權限後，run `30619840307` 的quality、Docker、三瀏覽器、PostgreSQL 9.6/17與MySQL 5.6/8.4全綠，里程碑四驗收完成。

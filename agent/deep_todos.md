@@ -12,7 +12,7 @@
 - [x] 完成里程碑三：M3A 資料 CRUD、M3B 核心 DDL、M3C 進階資料庫物件。
 - [x] 完成里程碑四 A：Web 使用者生命週期與每 connection 即時能力授權。
 - [x] 完成里程碑四 B：原生 DB 帳號、加密憑證、背景驗證與生命週期。
-- [ ] 完成里程碑四 C：跨 database 權限與完整驗收；本機功能與回歸已完成，等待四版本遠端矩陣。
+- [x] 完成里程碑四 C：跨 database 權限與完整驗收。
 - [ ] 完成里程碑五：CSV/JSON/SQL dump 匯入匯出。
 - [ ] 完成里程碑六：多實例、效能、安全與完整回歸。
 
@@ -63,4 +63,5 @@
 - 2026-07-31：MySQL 5.6 改用 `CREATE USER` 後 `GRANT USAGE ... WITH MAX_USER_CONNECTIONS`；CI 的受保護 DBWeb 管理連線明確取得 `CREATE USER ... WITH GRANT OPTION`，受管帳號本身仍不取得管理權限。GitHub Actions run `30616451344` 的 quality、container、browser、PostgreSQL 9.6/17、MySQL 5.6/8.4 全綠，M4B 完成並進入 M4C。
 - 2026-07-31：M4C 完成結構化跨 database grant/revoke planner、PostgreSQL direct ACL 與 MySQL grant table 實際權限讀取、受保護帳號與系統 database 防護、即時 `account-manage` 授權及安全 HTTP/runtime 組裝。
 - 2026-07-31：PostgreSQL grant batch 使用單一交易並於失敗全數 rollback；MySQL 逐步執行、首錯停止並回安全 `appliedCount/failedIndex`，每一步寫入 365 天 AES-GCM 安全稽核，SQL template 不以明文索引保存。
-- 2026-07-31：M4C 前端完成實際權限讀取、方言/層級白名單編輯、GRANT 與 REVOKE 二次確認；本機驗證為 62 個 Vitest 檔、264 tests 通過、10 個無本機 DB cases略過，lint、strict typecheck、production build及三瀏覽器授權E2E全綠。四版本真實grant矩陣待GitHub Actions實跑。
+- 2026-07-31：M4C 前端完成實際權限讀取、方言/層級白名單編輯、GRANT 與 REVOKE 二次確認；本機驗證為 62 個 Vitest 檔、264 tests 通過、10 個無本機 DB cases略過，lint、strict typecheck、production build及三瀏覽器授權E2E全綠。
+- 2026-07-31：M4C 首次遠端 run `30619429165` 由 MySQL 5.6/8.4 精準發現管理連線只能讀 `mysql.user`、無法讀取實際 database/table grants；CI 只補 `mysql.db` 與 `mysql.tables_priv` 的 `SELECT`，不擴張整個 system schema。最終 run `30619840307` 的 quality、container、browser、PostgreSQL 9.6/17、MySQL 5.6/8.4 全綠，里程碑四完成。
