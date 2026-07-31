@@ -176,6 +176,20 @@ tbody tr:hover { background: #f3faf6; }
 .grant-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .privilege-grid { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; border: 1px solid var(--line); padding: 12px; }
 .privilege-grid legend { padding: 0 5px; color: var(--muted); font-size: 11px; }
+.transfer-workbench { min-height: 0; overflow: auto; background: white; padding: 18px 20px; }
+.transfer-toolbar { display: grid; grid-template-columns: minmax(150px, 220px) minmax(150px, 220px) auto; gap: 12px; align-items: end; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+.transfer-list { display: grid; margin-top: 12px; border: 1px solid var(--line); }
+.transfer-row { display: grid; grid-template-columns: minmax(160px, 1fr) 100px minmax(120px, .6fr) minmax(230px, 1fr); gap: 12px; align-items: center; min-height: 60px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+.transfer-row:last-child { border-bottom: 0; }
+.transfer-identity { min-width: 0; display: grid; gap: 3px; }
+.transfer-identity strong { font: 600 12px 'IBM Plex Mono', monospace; }
+.transfer-identity small, .transfer-progress { color: var(--muted); font: 10px 'IBM Plex Mono', monospace; }
+.transfer-progress { display: flex; gap: 10px; flex-wrap: wrap; }
+.transfer-actions { display: flex; justify-content: flex-end; align-items: center; gap: 7px; flex-wrap: wrap; }
+.file-command { position: relative; overflow: hidden; display: inline-flex; min-height: 34px; align-items: center; border: 1px solid var(--line); border-radius: 4px; padding: 0 10px; background: white; font-size: 11px; font-weight: 600; cursor: pointer; }
+.file-command input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.upload-progress { color: var(--muted); font: 10px 'IBM Plex Mono', monospace; }
+.button-link { display: inline-flex; min-height: 34px; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 4px; padding: 0 10px; background: white; color: var(--ink); font-size: 11px; font-weight: 600; text-decoration: none; }
 @media (max-width: 760px) { .user-manager-grid { grid-template-columns: 1fr; } .user-lifecycle { grid-template-columns: 1fr; } }
 .mutation-form { display: grid; gap: 12px; padding: 18px; }
 .mutation-field { display: grid; grid-template-columns: minmax(90px, .7fr) minmax(180px, 2fr) 104px; align-items: end; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
@@ -220,4 +234,10 @@ tbody tr:hover { background: #f3faf6; }
   .password-once span { grid-column: 1 / -1; }
   .grant-toolbar, .grant-editor { grid-template-columns: 1fr; }
   .privilege-grid { grid-column: 1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .transfer-workbench { padding: 14px; }
+  .transfer-toolbar { grid-template-columns: 1fr 1fr; }
+  .transfer-toolbar .primary-button { grid-column: 1 / -1; }
+  .transfer-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .transfer-progress { justify-content: flex-end; }
+  .transfer-actions { grid-column: 1 / -1; justify-content: flex-start; }
 }

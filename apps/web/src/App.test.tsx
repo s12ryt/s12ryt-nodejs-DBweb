@@ -762,6 +762,85 @@ describe('DBWeb application shell', () => {
       },
     ])
   })
+
+  it('creates, lists, cancels, and exposes safe transfer job actions', async () => {
+    const commands: Array<{ method: string; url: string; body?: unknown }> = []
+    const uploadRequests: Array<{ method: string; url: string; checksum?: string }> = []
+    let jobs: Array<Record<string, unknown>> = [succeededTransferJob]
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input); const method = init?.method ?? 'GET'
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url === '/api/transfers' && method === 'GET') return Response.json(jobs)
+      if (url === '/api/transfers' && method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        commands.push({ method, url, body })
+        const created = { ...queuedTransferJob, ...body }
+        jobs = [created, ...jobs]
+        return Response.json(created, { status: 201 })
+      }
+      if (url.endsWith('/chunks') && method === 'GET') return Response.json([])
+      if (url.includes('/chunks/') && method === 'PUT') {
+        const checksum = new Headers(init?.headers).get('x-chunk-sha256')
+        uploadRequests.push({ method, url, ...(checksum ? { checksum } : {}) })
+        return Response.json({ index: 0, size: 3, checksum: '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81' })
+      }
+      if (url.endsWith('/upload-complete') && method === 'POST') {
+        uploadRequests.push({ method, url })
+        return Response.json({ ...queuedTransferJob, receivedBytes: 3, sourceBytes: 3, sourceChecksum: '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81' })
+      }
+      if (url.endsWith('/cancel') && method === 'POST') {
+        commands.push({ method, url, body: JSON.parse(String(init?.body)) as unknown })
+        const cancelled = { ...queuedTransferJob, status: 'cancelled' }
+        jobs = jobs.map((job) => job.id === queuedTransferJob.id ? cancelled : job)
+        return Response.json(cancelled)
+      }
+      return new Response(null, { status: 204 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText(connection.name))
+    await user.click(screen.getByRole('tab', { name: '匯入匯出' }))
+    expect(await screen.findByText('succeeded')).toBeVisible()
+    expect(screen.getByRole('link', { name: '下載 export-job' })).toHaveAttribute(
+      'href', '/api/transfers/22222222-2222-4222-8222-222222222222/download',
+    )
+
+    await user.selectOptions(screen.getByLabelText('方向'), 'import')
+    await user.selectOptions(screen.getByLabelText('格式'), 'json')
+    await user.click(screen.getByRole('button', { name: '建立工作' }))
+    expect(await screen.findByText('queued')).toBeVisible()
+    const sourceFile = screen.getByLabelText('來源檔案')
+    expect(sourceFile).toBeVisible()
+    await user.upload(sourceFile, new File([Uint8Array.from([1, 2, 3])], 'source.json', { type: 'application/json' }))
+    await waitFor(() => expect(uploadRequests).toHaveLength(2))
+    await user.click(screen.getByRole('button', { name: '取消 import-job' }))
+
+    expect(commands).toEqual([
+      {
+        method: 'POST', url: '/api/transfers',
+        body: { connectionId: connection.id, direction: 'import', format: 'json' },
+      },
+      {
+        method: 'POST',
+        url: '/api/transfers/11111111-1111-4111-8111-111111111111/cancel',
+        body: {},
+      },
+    ])
+    expect(uploadRequests).toEqual([
+      {
+        method: 'PUT',
+        url: '/api/transfers/11111111-1111-4111-8111-111111111111/chunks/0',
+        checksum: '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81',
+      },
+      {
+        method: 'POST',
+        url: '/api/transfers/11111111-1111-4111-8111-111111111111/upload-complete',
+      },
+    ])
+  })
 })
 
 const authenticatedSession = {
@@ -772,6 +851,34 @@ const authenticatedSession = {
 const passwordChangeSession = {
   user: { id: 'user-1', username: 'operator', role: 'user' as const, enabled: true, passwordChangeRequired: true },
   csrfToken: 'csrf-token',
+}
+
+const queuedTransferJob = {
+  id: '11111111-1111-4111-8111-111111111111',
+  ownerId: 'admin-1',
+  connectionId: 'connection-1',
+  direction: 'import',
+  format: 'json',
+  includeData: true,
+  status: 'queued',
+  receivedBytes: 0,
+  processedBytes: 0,
+  processedRows: 0,
+  processedTables: 0,
+  errorCount: 0,
+  createdAt: '2026-07-31T00:00:00.000Z',
+  updatedAt: '2026-07-31T00:00:00.000Z',
+  expiresAt: '2026-10-29T00:00:00.000Z',
+}
+
+const succeededTransferJob = {
+  ...queuedTransferJob,
+  id: '22222222-2222-4222-8222-222222222222',
+  direction: 'export',
+  format: 'csv',
+  status: 'succeeded',
+  processedBytes: 128,
+  processedRows: 4,
 }
 
 const managedReader = {

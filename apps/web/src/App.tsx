@@ -1,11 +1,13 @@
 import {
   AlertTriangle,
+  ArrowLeftRight,
   Braces,
   ChevronLeft,
   ChevronRight,
   CirclePlus,
   Columns3,
   Database,
+  Download,
   KeyRound,
   LogOut,
   Pencil,
@@ -42,11 +44,15 @@ import {
   type RowPage,
   type Session,
   type TaggedDatabaseValue,
+  type TransferDirection,
+  type TransferFormat,
+  type TransferJob,
   type User,
   type WebAccessAssignment,
   type WebCapability,
 } from './api.js'
 import { translations } from './i18n.js'
+import { uploadTransferFile } from './transfer-upload-client.js'
 
 export function App() {
   const [locale, setLocale] = useState<Locale>('zh-TW')
@@ -241,7 +247,7 @@ function EmptyWorkspace({ title, text }: { title: string; text: string }) {
 
 function ConnectionWorkspace({ connection, locale, csrfToken, isAdmin }: { connection: ConnectionProfile; locale: Locale; csrfToken: string; isAdmin: boolean }) {
   const t = translations(locale)
-  const [tab, setTab] = useState<'browse' | 'query' | 'structure' | 'accounts'>('browse')
+  const [tab, setTab] = useState<'browse' | 'query' | 'structure' | 'accounts' | 'transfers'>('browse')
   const [confirmingReset, setConfirmingReset] = useState(false)
   const [error, setError] = useState('')
   const ssh = connection.ssh?.enabled ? connection.ssh : undefined
@@ -268,14 +274,104 @@ function ConnectionWorkspace({ connection, locale, csrfToken, isAdmin }: { conne
         <button role="tab" aria-selected={tab === 'query'} onClick={() => setTab('query')}><Braces size={17} />{t('query')}</button>
         {isAdmin && <button role="tab" aria-selected={tab === 'structure'} onClick={() => setTab('structure')}><Wrench size={17} />{t('structure')}</button>}
         <button role="tab" aria-selected={tab === 'accounts'} onClick={() => setTab('accounts')}><ShieldCheck size={17} />{t('nativeAccounts')}</button>
+        <button role="tab" aria-selected={tab === 'transfers'} onClick={() => setTab('transfers')}><ArrowLeftRight size={17} />{t('transfers')}</button>
       </div>
       {tab === 'browse' && <DataBrowser connectionId={connection.id} locale={locale} csrfToken={csrfToken} isAdmin={isAdmin} />}
       {tab === 'query' && <QueryEditor connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
       {tab === 'structure' && isAdmin && <DdlWorkbench connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
       {tab === 'accounts' && <NativeAccountWorkbench connection={connection} locale={locale} csrfToken={csrfToken} isAdmin={isAdmin} />}
+      {tab === 'transfers' && <TransferWorkbench connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
       {confirmingReset && <ConfirmDialog title={t('sshReset')} body={t('sshResetBody')} confirm={t('sshResetConfirm')} cancel={t('cancel')} onCancel={() => setConfirmingReset(false)} onConfirm={() => void resetSshHostKey()} />}
     </div>
   )
+}
+
+function TransferWorkbench({ connectionId, locale, csrfToken }: { connectionId: string; locale: Locale; csrfToken: string }) {
+  const t = translations(locale)
+  const [jobs, setJobs] = useState<TransferJob[]>([])
+  const [direction, setDirection] = useState<TransferDirection>('export')
+  const [format, setFormat] = useState<TransferFormat>('csv')
+  const [error, setError] = useState('')
+  const [uploadingJobId, setUploadingJobId] = useState<string>()
+  const [uploadedBytes, setUploadedBytes] = useState(0)
+
+  const load = useCallback(async () => {
+    try {
+      const all = await apiRequest<TransferJob[]>('/api/transfers', { locale })
+      setJobs(all.filter((job) => job.connectionId === connectionId))
+      setError('')
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }, [connectionId, locale])
+
+  useEffect(() => { void load() }, [load])
+
+  async function createJob(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    try {
+      const created = await apiRequest<TransferJob>('/api/transfers', {
+        method: 'POST', locale, csrfToken, body: { connectionId, direction, format },
+      })
+      setJobs((current) => [created, ...current.filter((job) => job.id !== created.id)])
+      setError('')
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
+  async function cancelJob(job: TransferJob) {
+    try {
+      const cancelled = await apiRequest<TransferJob>(`/api/transfers/${encodeURIComponent(job.id)}/cancel`, {
+        method: 'POST', locale, csrfToken, body: {},
+      })
+      setJobs((current) => current.map((candidate) => candidate.id === cancelled.id ? cancelled : candidate))
+      setError('')
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
+  async function uploadSource(job: TransferJob, file: File) {
+    setUploadingJobId(job.id); setUploadedBytes(0); setError('')
+    try {
+      const completed = await uploadTransferFile({
+        jobId: job.id, file, csrfToken, locale,
+        onProgress: setUploadedBytes,
+      })
+      setJobs((current) => current.map((candidate) => candidate.id === completed.id ? completed : candidate))
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setUploadingJobId(undefined)
+    }
+  }
+
+  return <section className="transfer-workbench">
+    <form className="transfer-toolbar" onSubmit={(event) => void createJob(event)}>
+      <Field label={t('direction')}><select value={direction} onChange={(event) => setDirection(event.target.value as TransferDirection)}><option value="export">export</option><option value="import">import</option></select></Field>
+      <Field label={t('format')}><select value={format} onChange={(event) => setFormat(event.target.value as TransferFormat)}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">SQL</option></select></Field>
+      <button className="primary-button" type="submit"><Plus size={16} />{t('createJob')}</button>
+    </form>
+    {error && <div className="inline-error" role="alert">{error}</div>}
+    <div className="transfer-list">
+      {jobs.map((job) => {
+        const label = `${job.direction}-job`
+        const active = job.status === 'queued' || job.status === 'previewed' || job.status === 'running'
+        return <article className="transfer-row" key={job.id}>
+          <div className="transfer-identity"><strong>{label}</strong><small>{job.format.toUpperCase()} · {job.id.slice(0, 8)}</small></div>
+          <span className={`status transfer-status ${job.status}`}>{job.status}</span>
+          <div className="transfer-progress"><span>{job.processedRows} {t('rowUnit')}</span><span>{job.processedBytes} B</span></div>
+          <div className="transfer-actions">
+            {job.direction === 'import' && job.status === 'queued' && <label className="file-command">{t('sourceFile')}<input type="file" disabled={uploadingJobId === job.id} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadSource(job, file) }} /></label>}
+            {uploadingJobId === job.id && <span className="upload-progress">{uploadedBytes} B</span>}
+            {job.direction === 'export' && job.status === 'succeeded' && <a className="button-link" href={`/api/transfers/${encodeURIComponent(job.id)}/download`} aria-label={`${t('download')} ${label}`}><Download size={15} />{t('download')}</a>}
+            {active && <button type="button" aria-label={`${t('cancelJob')} ${label}`} onClick={() => void cancelJob(job)}>{t('cancelJob')}</button>}
+          </div>
+        </article>
+      })}
+    </div>
+  </section>
 }
 
 type NativeConfirmation =

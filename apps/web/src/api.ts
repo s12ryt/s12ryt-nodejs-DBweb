@@ -62,6 +62,28 @@ export interface NativeAccountResult {
   password?: string
 }
 
+export type TransferJobStatus = 'queued' | 'previewed' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export type TransferDirection = 'import' | 'export'
+export type TransferFormat = 'csv' | 'json' | 'sql'
+
+export interface TransferJob {
+  id: string
+  ownerId: string
+  connectionId: string
+  direction: TransferDirection
+  format: TransferFormat
+  includeData: boolean
+  status: TransferJobStatus
+  receivedBytes: number
+  processedBytes: number
+  processedRows: number
+  processedTables: number
+  errorCount: number
+  createdAt: string
+  updatedAt: string
+  expiresAt: string
+}
+
 export type NativePrivilege = 'connect' | 'usage' | 'select' | 'insert' | 'update' | 'delete' | 'create' | 'alter' | 'drop' | 'index' | 'references'
 
 export type NativeGrantChange =
