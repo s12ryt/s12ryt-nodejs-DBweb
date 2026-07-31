@@ -47,6 +47,8 @@ import {
   type TransferDirection,
   type TransferFormat,
   type TransferJob,
+  type TransferOutputResult,
+  type TransferPreviewResult,
   type User,
   type WebAccessAssignment,
   type WebCapability,
@@ -294,6 +296,7 @@ function TransferWorkbench({ connectionId, locale, csrfToken }: { connectionId: 
   const [error, setError] = useState('')
   const [uploadingJobId, setUploadingJobId] = useState<string>()
   const [uploadedBytes, setUploadedBytes] = useState(0)
+  const [configuring, setConfiguring] = useState<TransferJob>()
 
   const load = useCallback(async () => {
     try {
@@ -365,13 +368,81 @@ function TransferWorkbench({ connectionId, locale, csrfToken }: { connectionId: 
           <div className="transfer-actions">
             {job.direction === 'import' && job.status === 'queued' && <label className="file-command">{t('sourceFile')}<input type="file" disabled={uploadingJobId === job.id} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadSource(job, file) }} /></label>}
             {uploadingJobId === job.id && <span className="upload-progress">{uploadedBytes} B</span>}
+            {job.direction === 'export' && job.format === 'csv' && job.status === 'queued' && <button type="button" aria-label={`${t('configureExport')} ${label}`} onClick={() => setConfiguring(job)}>{t('configureExport')}</button>}
             {job.direction === 'export' && job.status === 'succeeded' && <a className="button-link" href={`/api/transfers/${encodeURIComponent(job.id)}/download`} aria-label={`${t('download')} ${label}`}><Download size={15} />{t('download')}</a>}
             {active && <button type="button" aria-label={`${t('cancelJob')} ${label}`} onClick={() => void cancelJob(job)}>{t('cancelJob')}</button>}
           </div>
         </article>
       })}
     </div>
+    {configuring && <FriendlyCsvExportDialog job={configuring} locale={locale} csrfToken={csrfToken} onClose={() => setConfiguring(undefined)} onExecuted={async () => { setConfiguring(undefined); await load() }} />}
   </section>
+}
+
+function FriendlyCsvExportDialog({ job, locale, csrfToken, onClose, onExecuted }: {
+  job: TransferJob
+  locale: Locale
+  csrfToken: string
+  onClose(): void
+  onExecuted(): Promise<void>
+}) {
+  const t = translations(locale)
+  const [schema, setSchema] = useState('')
+  const [table, setTable] = useState('')
+  const [delimiter, setDelimiter] = useState<',' | '\t' | ';'>(',')
+  const [bom, setBom] = useState(false)
+  const [preview, setPreview] = useState<TransferPreviewResult>()
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function createPreview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(''); setPreview(undefined)
+    try {
+      setPreview(await apiRequest<TransferPreviewResult>(`/api/transfers/${encodeURIComponent(job.id)}/preview`, {
+        method: 'POST', locale, csrfToken,
+        body: {
+          mapping: {},
+          strategy: { mode: 'friendly', delimiter, bom, rawFormulaValues: false },
+          target: { schema, table, filters: [] },
+        },
+      }))
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function executeExport() {
+    if (!preview) return
+    setBusy(true); setError('')
+    try {
+      await apiRequest<TransferOutputResult>(`/api/transfers/${encodeURIComponent(job.id)}/execute`, {
+        method: 'POST', locale, csrfToken, body: { previewToken: preview.token },
+      })
+      await onExecuted()
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <Modal title={t('configureCsvExport')} onClose={onClose}>
+    <form className="transfer-preview-form" onSubmit={(event) => void createPreview(event)}>
+      <Field label={t('ddlSchemaName')}><input required value={schema} onChange={(event) => setSchema(event.target.value)} /></Field>
+      <Field label={t('ddlTableName')}><input required value={table} onChange={(event) => setTable(event.target.value)} /></Field>
+      <Field label={t('csvDelimiter')}><select value={delimiter} onChange={(event) => setDelimiter(event.target.value as ',' | '\t' | ';')}><option value=",">,</option><option value="\t">TAB</option><option value=";">;</option></select></Field>
+      <label className="check-field"><input type="checkbox" checked={bom} onChange={(event) => setBom(event.target.checked)} />{t('csvBom')}</label>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      {preview && <div className="transfer-preview-summary"><strong>{t('estimated')}</strong><span>{preview.estimatedRows} {t('rowUnit')}</span><span>{preview.estimatedBytes} B</span></div>}
+      <div className="dialog-actions">
+        <button type="button" onClick={onClose}>{t('cancel')}</button>
+        <button className="primary-button" type="submit" disabled={busy}>{t('createPreview')}</button>
+        {preview && <button className="primary-button" type="button" disabled={busy} onClick={() => void executeExport()}>{t('executeExport')}</button>}
+      </div>
+    </form>
+  </Modal>
 }
 
 type NativeConfirmation =

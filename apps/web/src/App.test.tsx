@@ -841,6 +841,68 @@ describe('DBWeb application shell', () => {
       },
     ])
   })
+
+  it('previews and executes a server-validated friendly CSV export', async () => {
+    const commands: Array<{ url: string; body: unknown }> = []
+    let jobs = [{
+      ...queuedTransferJob,
+      id: '33333333-3333-4333-8333-333333333333',
+      direction: 'export',
+      format: 'csv',
+    }]
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input); const method = init?.method ?? 'GET'
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url === '/api/transfers' && method === 'GET') return Response.json(jobs)
+      if (url.endsWith('/preview') && method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as unknown
+        commands.push({ url, body })
+        jobs = jobs.map((job) => ({ ...job, status: 'previewed' }))
+        return Response.json({
+          token: 'v1.preview.signature', estimatedBytes: 128, estimatedRows: 2,
+          estimatedTables: 1, issues: [],
+        })
+      }
+      if (url.endsWith('/execute') && method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as unknown
+        commands.push({ url, body })
+        jobs = jobs.map((job) => ({ ...job, status: 'succeeded', processedRows: 2, processedBytes: 128 }))
+        return Response.json({ bytes: 128, chunks: 1, checksum: 'a'.repeat(64) })
+      }
+      return new Response(null, { status: 204 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText(connection.name))
+    await user.click(screen.getByRole('tab', { name: '匯入匯出' }))
+    await user.click(await screen.findByRole('button', { name: '設定 export-job' }))
+    const dialog = screen.getByRole('dialog', { name: '設定 CSV 匯出' })
+    await user.type(within(dialog).getByLabelText('Schema 名稱'), 'public')
+    await user.type(within(dialog).getByLabelText('資料表名稱'), 'orders')
+    await user.click(within(dialog).getByRole('checkbox', { name: '輸出 UTF-8 BOM' }))
+    await user.click(within(dialog).getByRole('button', { name: '產生預覽' }))
+    expect(await within(dialog).findByText('2 列')).toBeVisible()
+    await user.click(within(dialog).getByRole('button', { name: '執行匯出' }))
+    expect(await screen.findByText('succeeded')).toBeVisible()
+
+    expect(commands).toEqual([
+      {
+        url: '/api/transfers/33333333-3333-4333-8333-333333333333/preview',
+        body: {
+          mapping: {},
+          strategy: { mode: 'friendly', delimiter: ',', bom: true, rawFormulaValues: false },
+          target: { schema: 'public', table: 'orders', filters: [] },
+        },
+      },
+      {
+        url: '/api/transfers/33333333-3333-4333-8333-333333333333/execute',
+        body: { previewToken: 'v1.preview.signature' },
+      },
+    ])
+  })
 })
 
 const authenticatedSession = {

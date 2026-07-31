@@ -186,6 +186,10 @@ tbody tr:hover { background: #f3faf6; }
 .transfer-identity small, .transfer-progress { color: var(--muted); font: 10px 'IBM Plex Mono', monospace; }
 .transfer-progress { display: flex; gap: 10px; flex-wrap: wrap; }
 .transfer-actions { display: flex; justify-content: flex-end; align-items: center; gap: 7px; flex-wrap: wrap; }
+.transfer-preview-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.transfer-preview-form .check-field, .transfer-preview-form .inline-error, .transfer-preview-form .dialog-actions, .transfer-preview-summary { grid-column: 1 / -1; }
+.transfer-preview-summary { display: flex; align-items: center; gap: 14px; border-block: 1px solid var(--line); padding: 10px 0; color: var(--muted); font: 11px 'IBM Plex Mono', monospace; }
+.transfer-preview-summary strong { color: var(--ink); }
 .file-command { position: relative; overflow: hidden; display: inline-flex; min-height: 34px; align-items: center; border: 1px solid var(--line); border-radius: 4px; padding: 0 10px; background: white; font-size: 11px; font-weight: 600; cursor: pointer; }
 .file-command input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .upload-progress { color: var(--muted); font: 10px 'IBM Plex Mono', monospace; }
@@ -240,4 +244,6 @@ tbody tr:hover { background: #f3faf6; }
   .transfer-row { grid-template-columns: minmax(0, 1fr) auto; }
   .transfer-progress { justify-content: flex-end; }
   .transfer-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .transfer-preview-form { grid-template-columns: 1fr; }
+  .transfer-preview-form .check-field, .transfer-preview-form .inline-error, .transfer-preview-form .dialog-actions, .transfer-preview-summary { grid-column: 1; }
 }
