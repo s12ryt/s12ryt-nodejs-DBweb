@@ -9,7 +9,7 @@
 - [x] 建立 TypeScript/pnpm monorepo 與 Vitest/ESLint/TypeScript 測試基線。
 - [x] 完成里程碑一：後端身份、直連、唯讀瀏覽、SQL、保活、稽核、管理 UI、部署檔與跨瀏覽器 E2E。
 - [x] 完成里程碑二：SSH Tunnel 與 TOFU。
-- [ ] 完成里程碑三：M3A 資料 CRUD、M3B 核心 DDL、M3C 進階資料庫物件（M3A 遠端資料庫矩陣驗收中）。
+- [ ] 完成里程碑三：M3A 資料 CRUD、M3B 核心 DDL、M3C 進階資料庫物件（M3A 已完成；M3B 本機驗收完成，等待四版本 GitHub 矩陣；M3C 待開始）。
 - [ ] 完成里程碑四：Web/DB 帳號與權限分配。
 - [ ] 完成里程碑五：CSV/JSON/SQL dump 匯入匯出。
 - [ ] 完成里程碑六：多實例、效能、安全與完整回歸。
@@ -35,4 +35,9 @@
 - 2026-07-31：建立並推送 42 個原子初始提交；GitHub Actions quality、三瀏覽器 E2E 與 Docker image build 全綠。Docker build 曾因 `better-sqlite3` 缺 Python/toolchain 失敗，補齊 build stage 原生編譯工具後通過。
 - 2026-07-31：M3A 後端完成 tagged value codec、穩定列鍵策略、最多 100 列的交易式新增/更新/刪除/批次 patch、原始值樂觀鎖、PG/MySQL gateway、管理員 HTTP API、90 天加密異動稽核及 runtime 組裝。
 - 2026-07-31：M3A 前端完成 capability 驅動的新增、單列編輯、刪除確認、最多 100 列選取與共同 patch；generated、未知型別及無穩定唯一鍵依契約限制。
-- 2026-07-31：新增真實資料庫 mutation integration test 與 PostgreSQL 9.6/17、MySQL 5.6/8.4 GitHub Actions 矩陣；本機無資料庫時明確略過，遠端執行結果尚待確認。
+- 2026-07-31：M3A 首次遠端矩陣精準捕捉 PostgreSQL `name[]` array literal 與 MySQL 8.4 information_schema 欄名大小寫差異；以 PostgreSQL `text[]` 兼容解析及 MySQL 固定 alias 修復。
+- 2026-07-31：M3A GitHub Actions run `30597219150` 全綠；PostgreSQL 9.6/17、MySQL 5.6/8.4 真實 mutation、quality、Docker image 與三瀏覽器均通過。M3A 完成並直接進入 M3B。
+- 2026-07-31：M3B 完成依伺服器版本動態偵測的核心 DDL capabilities、結構化型別/default/storage 白名單，以及 database/schema/table/column/index/PK/UNIQUE/FK/CHECK 方言 SQL builder；高風險與重負載操作依契約要求二次確認。
+- 2026-07-31：M3B 完成 PG/MySQL DDL gateway、管理員限定 service/HTTP API、90 天 AES-GCM 加密 SQL template 稽核與 runtime 組裝；PG 可交易 DDL 使用交易，database DDL 與 MySQL DDL 依真實能力標記非原子。
+- 2026-07-31：M3B 前端完成管理員結構工作台與 16 項核心 DDL 命令，依 live capabilities 顯示/停用功能；本機最終驗證為 45 個 Vitest 檔通過、2 個整合檔略過，157 tests 通過、4 個真實 DB cases 略過，lint、typecheck、build 與三瀏覽器核心 E2E 全綠。
+- 2026-07-31：M3B PostgreSQL 9.6/17、MySQL 5.6/8.4 真實 DDL integration 已加入 GitHub Actions；本機因未設定資料庫服務而明確略過，待推送後以遠端矩陣驗收。

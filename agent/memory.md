@@ -26,4 +26,11 @@
 - 完成 PostgreSQL 9.6 相容 pg_catalog mutation gateway與 MySQL 5.6 information_schema gateway；所有值參數化，交易失敗 rollback，SSH socket沿用共用 provider並確實釋放。
 - 完成管理員限定 mutation capability/execute HTTP API、90 天 AES-GCM 加密 SQL template 稽核與 runtime wiring；異動稽核不保存 row before/after 或參數值。
 - 完成雙語資料新增、單列更新、刪除二次確認、最多 100 列選取與共同 patch UI；前端測試 10/10、M3A 鄰近後端測試 31 通過且 2 個無環境 integration cases明確略過，lint/typecheck均通過。
-- 新增 PostgreSQL 9.6/17 與 MySQL 5.6/8.4 GitHub Actions mutation integration矩陣；YAML已解析，本機無對應資料庫服務時測試明確略過，遠端結果待push後確認。
+- 新增 PostgreSQL 9.6/17 與 MySQL 5.6/8.4 GitHub Actions mutation integration矩陣；本機無對應資料庫服務時測試明確略過。
+- 首次 M3A 遠端矩陣 run `30596819966` 捕捉 PostgreSQL `name[]` array literal未映射及MySQL 8.4 information_schema欄名差異；先以unit RED重現，再用 PostgreSQL `text[]`兼容解析與MySQL固定`dbweb_*` alias修復。
+- 修復後 GitHub Actions run `30597219150` 全綠：PostgreSQL 9.6/17、MySQL 5.6/8.4真實mutation、quality、Docker image、Chromium/Firefox/WebKit均通過；M3A驗收完成。
+- 依 RED -> GREEN 完成 M3B 核心 DDL：版本化 capability、結構化 database/schema/table/column/index/PK/UNIQUE/FK/CHECK commands、型別/default/storage/fragment 白名單及高風險確認。
+- 完成 PostgreSQL/MySQL DDL gateways、管理員限定 service 與 HTTP API、runtime wiring，以及 90 天 AES-GCM 加密 SQL template 稽核；錯誤訊息不洩漏 driver 細節。
+- 完成雙語管理員結構工作台，涵蓋 16 項核心 DDL 操作並依 live capabilities 限制版本功能；前端 App tests 12/12 通過。
+- 新增 PostgreSQL 9.6/17 與 MySQL 5.6/8.4 真實 DDL integration，涵蓋建表、欄位、索引、約束、版本化 rename/CHECK 與 PostgreSQL rollback；GitHub workflow 已納入，待遠端執行。
+- M3B 推送前本機驗證：Vitest 45 files通過、2 files略過，157 tests通過、4個無本機DB環境的integration cases略過；ESLint、workspace strict typecheck、production build及Chromium/Firefox/WebKit核心E2E全綠。
