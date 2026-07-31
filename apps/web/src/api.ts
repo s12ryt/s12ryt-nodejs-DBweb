@@ -62,6 +62,13 @@ export interface NativeAccountResult {
   password?: string
 }
 
+export type NativePrivilege = 'connect' | 'usage' | 'select' | 'insert' | 'update' | 'delete' | 'create' | 'alter' | 'drop' | 'index' | 'references'
+
+export type NativeGrantChange =
+  | { scope: 'database'; database: string; privileges: NativePrivilege[] }
+  | { scope: 'schema'; database: string; schema: string; privileges: NativePrivilege[] }
+  | { scope: 'table'; database: string; schema?: string; table: string; privileges: NativePrivilege[] }
+
 export interface DatabaseTable {
   schema: string
   name: string
