@@ -84,6 +84,20 @@ export interface TransferJob {
   expiresAt: string
 }
 
+export interface TransferPreviewResult {
+  token: string
+  estimatedBytes: number
+  estimatedRows: number
+  estimatedTables: number
+  issues: Array<{ line?: number; column?: string; code: string; summary: string }>
+}
+
+export interface TransferOutputResult {
+  bytes: number
+  chunks: number
+  checksum: string
+}
+
 export type NativePrivilege = 'connect' | 'usage' | 'select' | 'insert' | 'update' | 'delete' | 'create' | 'alter' | 'drop' | 'index' | 'references'
 
 export type NativeGrantChange =
