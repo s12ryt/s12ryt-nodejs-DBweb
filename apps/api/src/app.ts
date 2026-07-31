@@ -733,6 +733,15 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       'create-table', 'rename-table', 'drop-table',
       'add-column', 'rename-column', 'drop-column',
       'create-index', 'drop-index', 'add-constraint', 'drop-constraint',
+      'create-view', 'drop-view',
+      'create-materialized-view', 'refresh-materialized-view', 'drop-materialized-view',
+      'create-sequence', 'drop-sequence',
+      'create-enum', 'create-domain', 'drop-type',
+      'create-extension', 'drop-extension',
+      'create-routine', 'drop-routine',
+      'create-trigger', 'drop-trigger',
+      'create-event', 'drop-event',
+      'create-partition', 'drop-partition',
     ]
 
     async function handleDdl(

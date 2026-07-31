@@ -96,6 +96,32 @@ describe('DDL HTTP API', () => {
     expect(execute).toHaveBeenCalledWith(admin, { connectionId: 'c1', command })
   })
 
+  it('接受需加密稽核的進階程式碼物件 command', async () => {
+    const { app, admin, execute, login } = await setup()
+    const session = await login('admin')
+    const command = {
+      kind: 'create-routine' as const,
+      routineKind: 'function' as const,
+      schema: 'public',
+      name: 'mask_email',
+      arguments: [],
+      returns: { name: 'text' },
+      language: 'sql',
+      body: "SELECT 'classified-body'",
+      confirmed: true,
+    }
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/connections/c1/ddl/execute',
+      headers: { cookie: session.cookie, 'x-csrf-token': session.csrfToken },
+      payload: { command },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(execute).toHaveBeenCalledWith(admin, { connectionId: 'c1', command })
+  })
+
   it('映射確認、驗證與 driver 錯誤，且不洩漏底層訊息', async () => {
     const { app, execute, login } = await setup()
     const session = await login('admin')
