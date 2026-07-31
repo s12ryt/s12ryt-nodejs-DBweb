@@ -228,7 +228,8 @@ describe.runIf(engine === 'mysql')('MySQL DDL integration', () => {
       })
       await run(gateway, capabilities, {
         kind: 'create-routine', routineKind: 'function', schema: database, name: 'dbweb_constant_value',
-        arguments: [], returns: { name: 'int' }, body: 'RETURN 7', confirmed: true,
+        arguments: [], returns: { name: 'int' }, body: 'RETURN 7',
+        deterministic: true, dataAccess: 'no-sql', confirmed: true,
       })
       await run(gateway, capabilities, {
         kind: 'create-routine', routineKind: 'procedure', schema: database, name: 'dbweb_noop_procedure',
