@@ -186,4 +186,28 @@ describe('FriendlyCsvExportService', () => {
     expect(writer.delete).toHaveBeenCalledWith(created.id)
     await expect(jobs.get(actor, created.id)).resolves.toMatchObject({ status: 'cancelled' })
   })
+
+  it('aborts an active export when the owner cancels it', async () => {
+    const environment = await setup()
+    let signalStarted!: () => void
+    const streamStarted = new Promise<void>((resolve) => { signalStarted = resolve })
+    const gateway = environment.gateway.stream as ReturnType<typeof vi.fn>
+    gateway.mockImplementation((_connection, request: { signal?: AbortSignal }) => (
+      async function* () {
+        signalStarted()
+        await new Promise<void>((_resolve, reject) => {
+          request.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+        })
+        yield {}
+      }
+    )())
+
+    const execution = environment.service.execute(actor, environment.created.id, 'token')
+    await streamStarted
+    const cancelled = environment.service.cancel(actor, environment.created.id)
+
+    await expect(execution).rejects.toEqual(new FriendlyCsvExportError('EXPORT_CANCELLED'))
+    await expect(cancelled).resolves.toMatchObject({ status: 'cancelled' })
+    expect(environment.writer.delete).toHaveBeenCalledWith(environment.created.id)
+  })
 })

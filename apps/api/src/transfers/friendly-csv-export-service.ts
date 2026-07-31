@@ -53,6 +53,12 @@ export class FriendlyCsvExportError extends Error {
 }
 
 export class FriendlyCsvExportService {
+  private readonly active = new Map<string, {
+    controller: AbortController
+    done: Promise<void>
+    finish(): void
+  }>()
+
   constructor(
     private readonly jobs: TransferJobService,
     private readonly connections: Pick<ConnectionService, 'resolveConnection'>,
@@ -68,7 +74,7 @@ export class FriendlyCsvExportService {
     actor: Pick<AuthUser, 'id' | 'role'>,
     jobId: string,
     previewToken: string,
-    signal = new AbortController().signal,
+    externalSignal = new AbortController().signal,
   ): Promise<TransferOutputResult> {
     const job = await this.jobs.get(actor, jobId)
     if (!await this.authorize(actor, job)) throw new FriendlyCsvExportError('FORBIDDEN')
@@ -77,11 +83,18 @@ export class FriendlyCsvExportService {
     }
     const plan = await this.preview.validate(actor, jobId, previewToken)
     const connection = await this.connections.resolveConnection(job.connectionId)
-    const running = await this.jobs.update(actor, jobId, (current) =>
-      transitionTransferJob(current, 'running', { updatedAt: this.now().toISOString() }))
+    if (this.active.has(jobId)) throw new FriendlyCsvExportError('INVALID_EXPORT_JOB')
+    const controller = new AbortController()
+    const signal = AbortSignal.any([externalSignal, controller.signal])
+    let finish!: () => void
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    this.active.set(jobId, { controller, done, finish })
+    let running = job
     let processedRows = 0
 
     try {
+      running = await this.jobs.update(actor, jobId, (current) =>
+        transitionTransferJob(current, 'running', { updatedAt: this.now().toISOString() }))
       const rows = this.countRows(this.gateways[connection.engine].stream(connection, {
         table: plan.table,
         filters: plan.filters,
@@ -135,7 +148,25 @@ export class FriendlyCsvExportService {
         errorCode: cancelled ? 'EXPORT_CANCELLED' : 'EXPORT_FAILED',
       }).catch(() => undefined)
       throw new FriendlyCsvExportError(cancelled ? 'EXPORT_CANCELLED' : 'EXPORT_FAILED')
+    } finally {
+      const active = this.active.get(jobId)
+      if (active?.controller === controller) {
+        this.active.delete(jobId)
+        active.finish()
+      }
     }
+  }
+
+  async cancel(
+    actor: Pick<AuthUser, 'id' | 'role'>,
+    jobId: string,
+  ): Promise<StoredTransferJob> {
+    await this.jobs.get(actor, jobId)
+    const active = this.active.get(jobId)
+    if (!active) return this.jobs.cancel(actor, jobId)
+    active.controller.abort()
+    await active.done
+    return this.jobs.get(actor, jobId)
   }
 
   private async *countRows(
