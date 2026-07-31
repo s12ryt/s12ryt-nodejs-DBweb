@@ -49,3 +49,80 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --tag dbweb:ci .
+
+  postgres-mutations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: ['9.6', '17']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_DB: dbweb
+          POSTGRES_USER: dbweb
+          POSTGRES_PASSWORD: dbweb-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dbweb -d dbweb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run apps/api/src/data/data-mutation.integration.test.ts
+        env:
+          DBWEB_INTEGRATION_ENGINE: postgres
+          DBWEB_INTEGRATION_HOST: 127.0.0.1
+          DBWEB_INTEGRATION_PORT: 5432
+          DBWEB_INTEGRATION_DATABASE: dbweb
+          DBWEB_INTEGRATION_USERNAME: dbweb
+          DBWEB_INTEGRATION_PASSWORD: dbweb-test-password
+
+  mysql-mutations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql-version: ['5.6', '8.4']
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql-version }}
+        env:
+          MYSQL_DATABASE: dbweb
+          MYSQL_USER: dbweb
+          MYSQL_PASSWORD: dbweb-test-password
+          MYSQL_ROOT_PASSWORD: dbweb-root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -udbweb -pdbweb-test-password"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run apps/api/src/data/data-mutation.integration.test.ts
+        env:
+          DBWEB_INTEGRATION_ENGINE: mysql
+          DBWEB_INTEGRATION_HOST: 127.0.0.1
+          DBWEB_INTEGRATION_PORT: 3306
+          DBWEB_INTEGRATION_DATABASE: dbweb
+          DBWEB_INTEGRATION_USERNAME: dbweb
+          DBWEB_INTEGRATION_PASSWORD: dbweb-test-password
