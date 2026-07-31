@@ -63,3 +63,10 @@
 - 完成雙語原生權限工作台：手動目標database、實際權限讀取、方言與scope白名單、GRANT及REVOKE確認；App tests 21/21，Chromium/Firefox/WebKit授權流程全綠。
 - M4C本機完整驗證：Vitest 62 files通過、3 integration files略過，264 tests通過、10個無本機DB cases略過；ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases按設定略過。
 - M4C首次GitHub Actions run `30619429165` 的MySQL 5.6/8.4由actual grant讀取精準發現管理連線缺少`mysql.db`與`mysql.tables_priv` SELECT；只補兩張目錄表的最小讀權限後，run `30619840307` 的quality、Docker、三瀏覽器、PostgreSQL 9.6/17與MySQL 5.6/8.4全綠，里程碑四驗收完成。
+- 完成M5完整契約澄清並拆成M5A job/安全暫存、M5B CSV/JSON與M5C SQL dump/restore；契約已寫入`agent/question.md`並提交。
+- 依RED -> GREEN完成M5A transfer job domain與Kysely repository：owner/connection各2筆active配額、狀態轉移、單調進度、CAS並行更新、取消與failed重新掃描；metadata保留90天。
+- EnvelopeEncryption新增binary格式；EncryptedChunkStore以source/output AAD namespace、8MiB chunk與10GiB上限實作原子發布、冪等續傳、段/整檔SHA-256、篡改/path traversal/symlink防護。Web使用`@noble/hashes`增量SHA-256，不會將大檔一次載入記憶體。
+- 完成transfer upload/list/complete/cancel/download HTTP與逐請求能力驗證；runtime組裝來源/輸出store、cleanup scheduler與安全stream download。成功/取消artifact保留24小時、failed保留7天，metadata/audit保留90天。
+- 完成30分鐘HMAC preview token與受信任inspector orchestration核心；token綁source checksum、mapping、strategy、target、capability與schema fingerprint。實際CSV/JSON/SQL inspector保留M5B/M5C接入，不接受client自行聲稱fingerprint。
+- 完成90天AES-GCM transfer audit，記job建立、upload complete、preview、取消與download，details型別不接受原始資料、檔名或密碼；SQLite raw file無checksum/details明文。
+- 完成雙語transfer工作台：建立/列出/取消job、安全下載、查既有chunks後略過相同段、逐段PUT與整檔complete。M5A完整本機驗證：Vitest 74 files通過、3 integration files略過，300 tests通過、10 cases略過；ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases按設定略過。

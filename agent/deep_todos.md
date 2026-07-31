@@ -13,7 +13,7 @@
 - [x] 完成里程碑四 A：Web 使用者生命週期與每 connection 即時能力授權。
 - [x] 完成里程碑四 B：原生 DB 帳號、加密憑證、背景驗證與生命週期。
 - [x] 完成里程碑四 C：跨 database 權限與完整驗收。
-- [ ] 完成里程碑五 A：持久化 job、分段加密暫存、preview 與安全下載基礎。
+- [x] 完成里程碑五 A：持久化 job、分段加密暫存、preview 與安全下載基礎。
 - [ ] 完成里程碑五 B：CSV/JSON 串流匯入匯出、映射、衝突與續傳。
 - [ ] 完成里程碑五 C：純 Node SQL dump/restore、進階物件、UI與完整驗收。
 - [ ] 完成里程碑六：多實例、效能、安全與完整回歸。
@@ -68,3 +68,7 @@
 - 2026-07-31：M4C 前端完成實際權限讀取、方言/層級白名單編輯、GRANT 與 REVOKE 二次確認；本機驗證為 62 個 Vitest 檔、264 tests 通過、10 個無本機 DB cases略過，lint、strict typecheck、production build及三瀏覽器授權E2E全綠。
 - 2026-07-31：M4C 首次遠端 run `30619429165` 由 MySQL 5.6/8.4 精準發現管理連線只能讀 `mysql.user`、無法讀取實際 database/table grants；CI 只補 `mysql.db` 與 `mysql.tables_priv` 的 `SELECT`，不擴張整個 system schema。最終 run `30619840307` 的 quality、container、browser、PostgreSQL 9.6/17、MySQL 5.6/8.4 全綠，里程碑四完成。
 - 2026-07-31：M5 完成契約澄清並拆為 M5A job/加密檔案基礎、M5B CSV/JSON、M5C SQL dump/完整驗收；支援10GB分段上傳、強制preview、批次重新掃描續傳、tar/gzip封裝、精確與友善匯出模式及同引擎進階物件restore。
+- 2026-07-31：M5A 完成 SQLite/PostgreSQL 持久化 transfer job、owner/connection 各兩筆 active 配額與 optimistic CAS；job 狀態、進度、取消、失敗重啟及 90 天 metadata 契約均由 domain/repository 測試保護。
+- 2026-07-31：來源與輸出使用不同 AAD namespace 的 AES-GCM 分段暫存；8 MiB chunks、10 GiB 上限、段與整檔 SHA-256、冪等續傳、symlink/path traversal/tamper 防護及 24 小時/7 天/90 天清理政策已完成。
+- 2026-07-31：完成受信任 inspector 驅動的 30 分鐘 preview token 核心、安全串流下載、90 天加密 transfer audit、逐請求能力驗證與 runtime cleanup scheduler；CSV/JSON 與 SQL 的實際 inspector 分別留在 M5B/M5C 接入。
+- 2026-07-31：雙語 transfer 工作台可建立、列出、取消、下載及以增量 SHA-256 分段上傳；M5A 本機驗證為 74 個 Vitest 檔通過、3 個 integration 檔略過，300 tests 通過、10 cases 略過，lint、strict typecheck、production build 與三瀏覽器既有 E2E 全綠。
