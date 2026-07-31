@@ -78,19 +78,12 @@ describe.runIf(engine === 'mysql')('MySQL native account integration', () => {
   it('creates, rotates, disables, enables, verifies, and deletes a restricted account', async () => {
     await dropMysqlTestAccount()
     try {
-      try {
-        await gateway.createAccount(connection, {
-          identity,
-          password: initialPassword,
-          canLogin: true,
-          connectionLimit: 2,
-        })
-      } catch (error) {
-        const rows = await mysqlAdminQuery(
-          "SELECT User AS dbweb_user, max_user_connections AS dbweb_limit FROM mysql.user WHERE User = 'dbweb_nat_test' AND Host = '%'",
-        )
-        throw new Error(JSON.stringify({ accountStateAfterFailure: rows }), { cause: error })
-      }
+      await gateway.createAccount(connection, {
+        identity,
+        password: initialPassword,
+        canLogin: true,
+        connectionLimit: 2,
+      })
       await mysqlAdminQuery(`GRANT SELECT ON \`${database.replaceAll('`', '``')}\`.* TO 'dbweb_nat_test'@'%'`)
       expect(await gateway.listAccounts(connection)).toEqual(expect.arrayContaining([
         expect.objectContaining({ identity, canLogin: true, connectionLimit: 2, systemAccount: false }),
