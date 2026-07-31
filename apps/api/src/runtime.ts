@@ -92,6 +92,21 @@ import { MysqlExactJsonImportGateway } from './transfers/mysql-exact-json-import
 import { MysqlTransferDataGateway } from './transfers/mysql-transfer-data-gateway.js'
 import { PostgresExactJsonImportGateway } from './transfers/postgres-exact-json-import-gateway.js'
 import { PostgresTransferDataGateway } from './transfers/postgres-transfer-data-gateway.js'
+import { MysqlSqlDumpSnapshotSessionFactory } from './transfers/mysql-sql-dump-snapshot.js'
+import { PostgresSqlDumpSnapshotSessionFactory } from './transfers/postgres-sql-dump-snapshot.js'
+import { SqlDumpExportPreviewCoordinator } from './transfers/sql-dump-export-preview.js'
+import { SqlDumpExportService } from './transfers/sql-dump-export-service.js'
+import { readSqlDumpPackage } from './transfers/sql-dump-package.js'
+import { SqlDumpPackageWriter } from './transfers/sql-dump-package-writer.js'
+import { SqlDumpSnapshotCatalog } from './transfers/sql-dump-snapshot-catalog.js'
+import { MysqlSqlRestoreCatalogGateway } from './transfers/mysql-sql-restore-catalog-gateway.js'
+import { MysqlSqlRestoreGateway } from './transfers/mysql-sql-restore-gateway.js'
+import { loadMysqlSqlDumpData } from './transfers/mysql-sql-restore-data-loader.js'
+import { PostgresSqlRestoreCatalogGateway } from './transfers/postgres-sql-restore-catalog-gateway.js'
+import { PostgresSqlRestoreGateway } from './transfers/postgres-sql-restore-gateway.js'
+import { loadPostgresSqlDumpData } from './transfers/postgres-sql-restore-data-loader.js'
+import { SqlRestorePreviewCoordinator } from './transfers/sql-restore-preview.js'
+import { SqlRestoreService } from './transfers/sql-restore-service.js'
 import { TransferHandlerRouter } from './transfers/transfer-handler-router.js'
 import { type CreateTransferJobInput, TransferJobService } from './transfers/transfer-job.js'
 import { TransferOutputWriter } from './transfers/transfer-output-writer.js'
@@ -353,6 +368,11 @@ export async function buildRuntime(
       encryption,
       purposeNamespace: 'csv-stage',
     })
+    const transferSqlStageStore = new EncryptedChunkStore({
+      root: join(transferRoot, 'sql-stage'),
+      encryption,
+      purposeNamespace: 'sql-stage',
+    })
     const transferUploadService = new TransferUploadService(
       transferJobService,
       transferSourceStore,
@@ -527,6 +547,81 @@ export async function buildRuntime(
         cancel: (...args) => exactCsvImportService.cancel(...args),
       },
     )
+    const sqlSnapshotCatalogs = {
+      postgres: new SqlDumpSnapshotCatalog(
+        new PostgresSqlDumpSnapshotSessionFactory(undefined, undefined, socketProvider),
+      ),
+      mysql: new SqlDumpSnapshotCatalog(
+        new MysqlSqlDumpSnapshotSessionFactory(undefined, undefined, socketProvider),
+      ),
+    }
+    const sqlTransferAuthorizer = async (
+      actor: { id: string; role: 'admin' | 'user' },
+      job: CreateTransferJobInput,
+    ) => {
+      const allowed = await authorizeTransfer(webAccessService, actor, job)
+      return {
+        allowed,
+        fingerprint: createHash('sha256')
+          .update(JSON.stringify({ direction: job.direction, format: 'sql', includeData: job.includeData, allowed }))
+          .digest('hex'),
+      }
+    }
+    const sqlDumpExportPreview = new SqlDumpExportPreviewCoordinator(
+      transferJobService,
+      connectionService,
+      sqlSnapshotCatalogs,
+      transferPreviewPlans,
+      sqlTransferAuthorizer,
+    )
+    const sqlDumpPackages = new SqlDumpPackageWriter(
+      new TransferOutputWriter(transferSqlStageStore),
+      transferSqlStageStore,
+      new TransferOutputWriter(transferOutputStore),
+    )
+    const sqlDumpExportService = new SqlDumpExportService(
+      transferJobService,
+      connectionService,
+      sqlSnapshotCatalogs,
+      sqlDumpPackages,
+      sqlDumpExportPreview,
+      (actor, job) => authorizeTransfer(webAccessService, actor, job),
+      undefined,
+      transferAudit,
+    )
+    const sqlSourcePackages = {
+      readManifest: async (jobId: string) => (await readStoredSqlDumpPackage(
+        transferSourceStore,
+        jobId,
+        async () => undefined,
+      )).manifest,
+      read: (
+        jobId: string,
+        handler: Parameters<typeof readSqlDumpPackage>[1],
+      ) => readStoredSqlDumpPackage(transferSourceStore, jobId, handler).then(({ manifest }) => manifest),
+    }
+    const sqlRestorePreview = new SqlRestorePreviewCoordinator(
+      transferJobService,
+      connectionService,
+      sqlSourcePackages,
+      {
+        postgres: new PostgresSqlRestoreCatalogGateway(undefined, socketProvider),
+        mysql: new MysqlSqlRestoreCatalogGateway(undefined, socketProvider),
+      },
+      transferPreviewPlans,
+      sqlTransferAuthorizer,
+    )
+    const sqlRestoreService = new SqlRestoreService(
+      transferJobService,
+      connectionService,
+      sqlRestorePreview,
+      sqlSourcePackages,
+      {
+        postgres: new PostgresSqlRestoreGateway(undefined, socketProvider, loadPostgresSqlDumpData),
+        mysql: new MysqlSqlRestoreGateway(undefined, socketProvider, loadMysqlSqlDumpData),
+      },
+      (actor, job) => authorizeTransfer(webAccessService, actor, job),
+    )
     const transferHandlers = new TransferHandlerRouter(transferJobService, {
       friendlyCsvExport: {
         inspect: (...args) => csvTransferHandler.inspect(...args),
@@ -543,6 +638,16 @@ export async function buildRuntime(
         execute: (...args) => exactJsonImportService.execute(...args),
         cancel: (...args) => exactJsonImportService.cancel(...args),
       },
+      sqlDumpExport: {
+        inspect: (...args) => sqlDumpExportPreview.inspect(...args),
+        execute: (...args) => sqlDumpExportService.execute(...args),
+        cancel: (...args) => sqlDumpExportService.cancel(...args),
+      },
+      sqlRestore: {
+        inspect: (...args) => sqlRestorePreview.inspect(...args),
+        execute: (...args) => sqlRestoreService.execute(...args),
+        cancel: (...args) => transferJobService.cancel(...args),
+      },
     })
     const transferPreviewService = new TransferPreviewService(
       transferJobService,
@@ -553,7 +658,7 @@ export async function buildRuntime(
     )
     const transferCleanupService = new TransferCleanupService(
       transferJobRepository,
-      [transferSourceStore, transferOutputStore, transferJsonStageStore, transferCsvStageStore],
+      [transferSourceStore, transferOutputStore, transferJsonStageStore, transferCsvStageStore, transferSqlStageStore],
       [transferAuditRepository, transferPreviewPlanRepository],
     )
     transferCleanupScheduler = dependencies.createTransferCleanupScheduler?.(
@@ -617,6 +722,27 @@ async function* streamStoredChunks(
     if (chunks[index]?.index !== index) throw new Error('TRANSFER_CHUNK_SEQUENCE_INVALID')
     yield await store.read(jobId, index)
   }
+}
+
+async function readStoredSqlDumpPackage(
+  store: Pick<EncryptedChunkStore, 'list' | 'read'>,
+  jobId: string,
+  handler: Parameters<typeof readSqlDumpPackage>[1],
+) {
+  const source = streamStoredChunks(store, jobId)
+  const iterator = source[Symbol.asyncIterator]()
+  const first = await iterator.next()
+  if (first.done) throw new Error('SQL_DUMP_PACKAGE_EMPTY')
+  const compression = first.value[0] === 0x1f && first.value[1] === 0x8b ? 'gzip' as const : 'none' as const
+  const replay = async function* () {
+    yield first.value
+    for (;;) {
+      const next = await iterator.next()
+      if (next.done) return
+      yield next.value
+    }
+  }
+  return readSqlDumpPackage(replay(), handler, { compression })
 }
 
 async function authorizeTransfer(
