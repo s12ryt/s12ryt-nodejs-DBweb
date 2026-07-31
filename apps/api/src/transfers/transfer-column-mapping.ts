@@ -38,6 +38,7 @@ export function buildTransferColumnMapping(
   sourceColumns: TransferSourceColumn[],
   targetColumns: TransferTargetColumn[],
   overrides: TransferColumnMappingInput[],
+  options: { allowGeneratedTargets?: boolean } = {},
 ): TransferColumnMappingPlan {
   const sources = uniqueByName(sourceColumns)
   const targets = uniqueByName(targetColumns)
@@ -59,7 +60,12 @@ export function buildTransferColumnMapping(
     const targetName = override?.target ?? (targets.has(source.name) ? source.name : undefined)
     if (!targetName) invalidMapping()
     const target = targets.get(targetName)
-    if (!target || target.generated || target.type !== source.type || usedTargets.has(target.name)) {
+    if (
+      !target
+      || (target.generated && options.allowGeneratedTargets !== true)
+      || target.type !== source.type
+      || usedTargets.has(target.name)
+    ) {
       invalidMapping()
     }
     usedTargets.add(target.name)
