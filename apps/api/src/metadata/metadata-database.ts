@@ -7,6 +7,9 @@ import {
 } from 'kysely'
 import { Pool } from 'pg'
 
+import type { DdlCommand } from '../ddl/ddl-command.js'
+import type { DdlAuditEntry } from '../ddl/ddl-service.js'
+
 interface UsersTable {
   id: string
   username: string
@@ -103,14 +106,9 @@ interface DdlAuditsTable {
   id: string
   actor_id: string
   connection_id: string
-  object_type: 'database' | 'schema' | 'table' | 'column' | 'index' | 'constraint'
+  object_type: DdlAuditEntry['objectType']
   object_name: string
-  action:
-    | 'create-database' | 'rename-database' | 'drop-database'
-    | 'create-schema' | 'rename-schema' | 'drop-schema'
-    | 'create-table' | 'rename-table' | 'drop-table'
-    | 'add-column' | 'rename-column' | 'drop-column'
-    | 'create-index' | 'drop-index' | 'add-constraint' | 'drop-constraint'
+  action: DdlCommand['kind']
   statement_count: number
   transactional: number
   status: 'success' | 'failed'
