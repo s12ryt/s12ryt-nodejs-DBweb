@@ -27,8 +27,8 @@ describe('PostgresDataMutationGateway', () => {
         { column_name: 'payload', type_name: 'jsonb', type_category: 'U', nullable: true, default_expression: null },
       ] })
       .mockResolvedValueOnce({ rows: [
-        { key_name: 'orders_pkey', primary_key: true, columns: ['id'] },
-        { key_name: 'orders_email_key', primary_key: false, columns: ['email'] },
+        { key_name: 'orders_pkey', primary_key: true, columns: '{id}' },
+        { key_name: 'orders_email_key', primary_key: false, columns: '{email}' },
       ] })
     const client = { connect: vi.fn(), query, end: vi.fn() }
     const gateway = new PostgresDataMutationGateway(() => client)
@@ -47,6 +47,7 @@ describe('PostgresDataMutationGateway', () => {
       ],
     })
     expect(query.mock.calls[0]?.[1]).toEqual(['odd"schema', 'orders'])
+    expect(query.mock.calls[1]?.[0]).toContain('array_agg(a.attname::text')
     expect(query.mock.calls[1]?.[1]).toEqual(['odd"schema', 'orders'])
     expect(client.end).toHaveBeenCalledOnce()
   })

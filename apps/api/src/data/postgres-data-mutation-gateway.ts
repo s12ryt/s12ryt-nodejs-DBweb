@@ -51,7 +51,7 @@ export class PostgresDataMutationGateway implements DataMutationGateway {
       )
       const keyResult = await client.query(
         `SELECT i.relname AS key_name, x.indisprimary AS primary_key,
-                array_agg(a.attname ORDER BY k.ordinality) AS columns
+                array_agg(a.attname::text ORDER BY k.ordinality) AS columns
          FROM pg_catalog.pg_index x
          JOIN pg_catalog.pg_class c ON c.oid = x.indrelid
          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -174,6 +174,36 @@ function mapPostgresKey(row: Record<string, unknown>): MutationUniqueKey {
   return {
     name: String(row.key_name),
     kind: row.primary_key === true ? 'primary' : 'unique',
-    columns: Array.isArray(row.columns) ? row.columns.map(String) : [],
+    columns: parsePostgresTextArray(row.columns),
   }
+}
+
+function parsePostgresTextArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String)
+  if (typeof value !== 'string' || !value.startsWith('{') || !value.endsWith('}')) return []
+  if (value === '{}') return []
+
+  const items: string[] = []
+  let item = ''
+  let quoted = false
+  let escaped = false
+  for (let index = 1; index < value.length - 1; index += 1) {
+    const character = value[index]
+    if (escaped) {
+      item += character
+      escaped = false
+    } else if (character === '\\') {
+      escaped = true
+    } else if (character === '"') {
+      quoted = !quoted
+    } else if (character === ',' && !quoted) {
+      items.push(item)
+      item = ''
+    } else {
+      item += character
+    }
+  }
+  if (quoted || escaped) return []
+  items.push(item)
+  return items
 }
