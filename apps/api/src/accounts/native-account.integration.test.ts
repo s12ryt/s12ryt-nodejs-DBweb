@@ -86,11 +86,15 @@ describe.runIf(engine === 'mysql')('MySQL native account integration', () => {
           connectionLimit: 2,
         })
       } catch (error) {
+        const updateProbe = await diagnoseMysqlStatement(
+          "UPDATE mysql.user SET max_user_connections = 2 WHERE User = 'dbweb_nat_test' AND Host = '%'",
+        )
+        const flushProbe = await diagnoseMysqlStatement('FLUSH PRIVILEGES')
         const accountState = await mysqlAdminQuery(
           "SELECT User AS dbweb_user, max_user_connections AS dbweb_limit FROM mysql.user WHERE User = 'dbweb_nat_test' AND Host = '%'",
         )
         const grants = await mysqlAdminQuery("SHOW GRANTS FOR 'dbweb'@'%'")
-        throw new Error(JSON.stringify({ accountState, grants }), { cause: error })
+        throw new Error(JSON.stringify({ updateProbe, flushProbe, accountState, grants }), { cause: error })
       }
       await mysqlAdminQuery(`GRANT SELECT ON \`${database.replaceAll('`', '``')}\`.* TO 'dbweb_nat_test'@'%'`)
       expect(await gateway.listAccounts(connection)).toEqual(expect.arrayContaining([
@@ -135,6 +139,30 @@ async function mysqlAdminQuery(sql: string): Promise<Array<Record<string, unknow
     const [rows] = await client.query(sql)
     return Array.isArray(rows) ? rows as Array<Record<string, unknown>> : []
   } finally { await client.end() }
+}
+
+async function diagnoseMysqlStatement(sql: string): Promise<Record<string, unknown>> {
+  const client = await mysql.createConnection({ host, port, user: username, password })
+  try {
+    await client.query(sql)
+    return { status: 'ok' }
+  } catch (error) {
+    const driverError = error as Partial<{
+      code: string
+      errno: number
+      sqlState: string
+      message: string
+    }>
+    return {
+      status: 'failed',
+      code: driverError.code,
+      errno: driverError.errno,
+      sqlState: driverError.sqlState,
+      message: driverError.message,
+    }
+  } finally {
+    await client.end()
+  }
 }
 
 async function dropMysqlTestAccount(): Promise<void> {
