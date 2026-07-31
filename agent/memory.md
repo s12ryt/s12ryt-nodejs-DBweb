@@ -45,3 +45,9 @@
 - 將 Vitest `maxWorkers` 設為2，修復多個正式Argon2 HTTP測試平行競爭造成的5秒逾時；單檔與限制worker後完整測試均通過，產品Argon2設定未變。
 - M3C第二次run `30602275693` 的MySQL 8.4仍失敗；新增只存在integration test的driver診斷後，run `30602542105`取得`ER_BINLOG_CREATE_ROUTINE_NEED_SUPER`，確認SQL已有`DETERMINISTIC NO SQL`，失敗源於MySQL 8.4 binary logging的全域權限政策，而非builder語法。
 - MySQL CI矩陣由root設定測試專用`log_bin_trust_function_creators=1`後，再由一般`dbweb`帳號執行routine與其餘DDL；正式gateway仍遮蔽driver細節。最終run `30602738639`的quality、Docker、三瀏覽器、PostgreSQL 9.6/17及MySQL 5.6/8.4全部通過，M3C與里程碑三完成。
+- 完成 M4 完整需求澄清並寫入 `agent/question.md`，拆分 M4A Web 身份與能力、M4B 原生帳號生命週期及 M4C 跨 database grants/完整驗收。
+- 依 RED -> GREEN 完成每 connection 六項 Web capability、能力相依閉包、一般使用者可見連線過濾與逐請求即時授權；M4 migration 不替既有一般使用者自動分配連線。
+- 唯讀 SQL 新增保守語句掃描器，拒絕多語句、寫入/DDL、鎖定查詢及不完整字串，並在 PostgreSQL 使用 `BEGIN READ ONLY`、MySQL 使用 `START TRANSACTION READ ONLY`；資料異動與 DDL 同時在 HTTP 與 service authorizer 檢查 capability。
+- 依 RED -> GREEN 完成 Web 使用者停啟、角色升降、20 字元生成臨時密碼、強制首次改密碼、管理員重設與永久刪除；狀態、角色與密碼變更均撤銷全部 sessions，metadata transaction lock 防止並行操作移除最後可用管理員。
+- 新增 365 天 AES-GCM security audit，保存 Web 使用者與授權事件但型別及資料表均不接受密碼；刪除使用者後仍保留不可登入的 target ID。
+- 完成雙語使用者與權限工作台、一次性臨時密碼顯示、生命週期控制與六能力矩陣；修正使用者列 accessible name及共用 Modal 重複heading ID。M4A本機驗證：Vitest 52 files/215 tests、6 integration cases skipped，ESLint、workspace strict typecheck、production build與Chromium/Firefox/WebKit核心E2E全綠。

@@ -10,7 +10,8 @@
 - [x] 完成里程碑一：後端身份、直連、唯讀瀏覽、SQL、保活、稽核、管理 UI、部署檔與跨瀏覽器 E2E。
 - [x] 完成里程碑二：SSH Tunnel 與 TOFU。
 - [x] 完成里程碑三：M3A 資料 CRUD、M3B 核心 DDL、M3C 進階資料庫物件。
-- [ ] 完成里程碑四：Web/DB 帳號與權限分配。
+- [x] 完成里程碑四 A：Web 使用者生命週期與每 connection 即時能力授權。
+- [ ] 完成里程碑四 B/C：原生 DB 帳號、跨 database 權限與完整驗收。
 - [ ] 完成里程碑五：CSV/JSON/SQL dump 匯入匯出。
 - [ ] 完成里程碑六：多實例、效能、安全與完整回歸。
 
@@ -49,3 +50,7 @@
 - 2026-07-31：第二次 run `30602275693` 仍由 MySQL 8.4 拒絕函式建立；加入僅整合測試使用的安全診斷後，run `30602542105` 精確取得 `ER_BINLOG_CREATE_ROUTINE_NEED_SUPER`，證明即使 SQL 含 `DETERMINISTIC NO SQL`，預設 binary logging 政策仍要求全域管理權限。
 - 2026-07-31：MySQL 矩陣由 root 明確設定測試專用 `log_bin_trust_function_creators=1`，再以非管理員 `dbweb` 帳號執行功能驗收；產品 gateway 仍只回安全 `DDL_FAILED`。最終 GitHub Actions run `30602738639` 的 quality、container、browser、PostgreSQL 9.6/17、MySQL 5.6/8.4 全綠，M3C 與里程碑三完成。
 - 2026-07-31：Vitest worker 上限設為 2，避免多個正式 Argon2 HTTP 測試同時執行造成資源競爭逾時；未降低密碼雜湊參數或測試斷言。
+- 2026-07-31：M4 契約細分為 M4A Web 使用者與每 connection 能力、M4B 原生帳號與憑證生命週期、M4C 跨 database grant/revoke 與完整 UI/矩陣驗收。
+- 2026-07-31：M4A 完成六項 Web capability、未授權 connection 隱藏與逐請求 metadata 驗權；一般使用者 SQL 同時經語句分類器及 PostgreSQL/MySQL 唯讀交易防護，資料異動與 DDL 在 HTTP/service 兩層授權。
+- 2026-07-31：M4A 完成 Web 使用者停啟、角色升降、臨時密碼、強制改密碼、重設與永久刪除；所有敏感狀態變更撤銷 sessions，最後可用管理員由 metadata transaction lock 保護。
+- 2026-07-31：M4A 安全事件以 AES-GCM 保存 365 天且不記錄密碼；前端完成使用者生命週期與六能力矩陣，並修正共用 dialog 重複 heading ID。完整本機驗證為 52 個 Vitest 檔、215 tests 通過、6 個無本機 DB cases 略過，lint、strict typecheck、production build 與三瀏覽器核心 E2E 全綠。
