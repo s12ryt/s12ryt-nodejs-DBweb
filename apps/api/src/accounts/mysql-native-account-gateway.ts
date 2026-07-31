@@ -84,9 +84,20 @@ export class MysqlNativeAccountGateway implements NativeAccountGateway {
         ? request.canLogin ? ' ACCOUNT UNLOCK' : ' ACCOUNT LOCK'
         : ''
       const connectionLimit = request.connectionLimit === -1 ? 0 : request.connectionLimit
+      if (versionAtLeast(version, 5, 7)) {
+        await client.query(
+          `CREATE USER ${accountSql(identity)} IDENTIFIED BY ${quoteLiteral(request.password)} WITH MAX_USER_CONNECTIONS ${connectionLimit}${lock}`,
+        )
+        return
+      }
+
       await client.query(
-        `CREATE USER ${accountSql(identity)} IDENTIFIED BY ${quoteLiteral(request.password)} WITH MAX_USER_CONNECTIONS ${connectionLimit}${lock}`,
+        `CREATE USER ${accountSql(identity)} IDENTIFIED BY ${quoteLiteral(request.password)}`,
       )
+      await client.query(
+        `UPDATE mysql.user SET max_user_connections = ${connectionLimit} WHERE User = ${quoteLiteral(identity.username)} AND Host = ${quoteLiteral(identity.host)}`,
+      )
+      await client.query('FLUSH PRIVILEGES')
     })
   }
 
