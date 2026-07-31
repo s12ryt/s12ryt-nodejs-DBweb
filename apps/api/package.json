@@ -21,12 +21,14 @@
     "kysely": "0.29.4",
     "mysql2": "3.23.2",
     "pg": "8.22.0",
+    "pg-cursor": "2.21.0",
     "ssh2": "1.17.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/pg": "^8.16.0",
+    "@types/pg-cursor": "2.7.2",
     "@types/ssh2": "1.15.5",
     "tsx": "^4.21.0"
   }
