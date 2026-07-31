@@ -97,3 +97,6 @@
 - 2026-08-01：MySQL catalog 的完整反引號單一 partition identifier只在snapshot邊界正規化，DDL fragment白名單仍拒絕反引號與任意SQL；commit `481c382` 後 GitHub Actions run `30656631225` 的quality、Docker、browser、PostgreSQL 9.6/17與MySQL 5.6/8.4全部通過，四個DB job均真正完成SQL dump/restore roundtrip。
 - 2026-08-01：移除integration-only診斷後，M5C最終本機回歸為114個Vitest檔通過、5個integration檔略過，442 tests通過、14個無本機DB cases略過；lint、strict typecheck、production build及Playwright 7 passed/2既定responsive skipped全綠。M5C完成並直接進入M6。
 - 2026-08-01：完成M6契約澄清：兩主動一待命、PostgreSQL權威狀態與Redis cache/通知/queue加速、Redis circuit breaker自動降級、DB lease at-least-once worker、advisory-lock migration、S3/MinIO應用層加密共享物件、三態健康檢查、全域連線閘門、keyset/NDJSON/transfer百萬列路徑、同runner相對效能門檻與完整供應鏈安全阻擋條件。M6開始實作。
+- 2026-08-01：M6第一階段完成Redis circuit breaker、PG session revision權威驗證與Redis session cache、專用Pub/Sub subscriber、三態health，以及Redis失效時自動走PG的runtime組裝；Redis只加速，不成為權威狀態。
+- 2026-08-01：transfer工作改為明確execution request後才可由PG lease claim；60秒lease、20秒heartbeat、最多五次指數退避、Redis wake與30秒PG polling已組裝。取消後heartbeat立即失去租約，避免跨實例工作繼續執行。
+- 2026-08-01：PostgreSQL metadata migration以固定advisory lock序列化多實例啟動；新增AWS S3/MinIO相容chunk store，保留source/output/staging AAD隔離、SHA-256、冪等put、跨實例list/delete及可選SSE。S3 runtime設定與HeadBucket readiness已通過單元整合測試；真實Redis/PostgreSQL/MinIO多實例驗收仍待完成。
