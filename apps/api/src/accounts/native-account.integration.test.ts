@@ -78,12 +78,16 @@ describe.runIf(engine === 'mysql')('MySQL native account integration', () => {
   it('creates, rotates, disables, enables, verifies, and deletes a restricted account', async () => {
     await dropMysqlTestAccount()
     try {
-      await gateway.createAccount(connection, {
-        identity,
-        password: initialPassword,
-        canLogin: true,
-        connectionLimit: 2,
-      })
+      try {
+        await gateway.createAccount(connection, {
+          identity,
+          password: initialPassword,
+          canLogin: true,
+          connectionLimit: 2,
+        })
+      } catch (error) {
+        await diagnoseMysqlCreateAccount(error)
+      }
       await mysqlAdminQuery(`GRANT SELECT ON \`${database.replaceAll('`', '``')}\`.* TO 'dbweb_native_test'@'%'`)
       expect(await gateway.listAccounts(connection)).toEqual(expect.arrayContaining([
         expect.objectContaining({ identity, canLogin: true, connectionLimit: 2, systemAccount: false }),
@@ -127,6 +131,26 @@ async function mysqlAdminQuery(sql: string): Promise<Array<Record<string, unknow
     const [rows] = await client.query(sql)
     return Array.isArray(rows) ? rows as Array<Record<string, unknown>> : []
   } finally { await client.end() }
+}
+
+async function diagnoseMysqlCreateAccount(cause: unknown): Promise<never> {
+  const client = await mysql.createConnection({ host, port, database, user: username, password })
+  try {
+    await client.query(
+      "CREATE USER 'dbweb_native_test'@'%' IDENTIFIED BY 'dbweb-native-initial-password' WITH MAX_USER_CONNECTIONS 2",
+    )
+  } catch (error) {
+    const diagnostic = error as { code?: unknown; errno?: unknown; sqlState?: unknown; message?: unknown }
+    throw new Error(JSON.stringify({
+      code: diagnostic.code,
+      errno: diagnostic.errno,
+      sqlState: diagnostic.sqlState,
+      message: diagnostic.message,
+    }), { cause: error })
+  } finally {
+    await client.end()
+  }
+  throw cause
 }
 
 async function dropMysqlTestAccount(): Promise<void> {
