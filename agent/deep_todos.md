@@ -72,3 +72,4 @@
 - 2026-07-31：來源與輸出使用不同 AAD namespace 的 AES-GCM 分段暫存；8 MiB chunks、10 GiB 上限、段與整檔 SHA-256、冪等續傳、symlink/path traversal/tamper 防護及 24 小時/7 天/90 天清理政策已完成。
 - 2026-07-31：完成受信任 inspector 驅動的 30 分鐘 preview token 核心、安全串流下載、90 天加密 transfer audit、逐請求能力驗證與 runtime cleanup scheduler；CSV/JSON 與 SQL 的實際 inspector 分別留在 M5B/M5C 接入。
 - 2026-07-31：雙語 transfer 工作台可建立、列出、取消、下載及以增量 SHA-256 分段上傳；M5A 本機驗證為 74 個 Vitest 檔通過、3 個 integration 檔略過，300 tests 通過、10 cases 略過，lint、strict typecheck、production build 與三瀏覽器既有 E2E 全綠。
+- 2026-07-31：M5A 以 15 筆原子提交推送；GitHub Actions run `30627658026` 的 quality、Docker image、browser、PostgreSQL 9.6/17 與 MySQL 5.6/8.4 全綠，M5A 完成並直接進入 M5B。

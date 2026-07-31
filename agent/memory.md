@@ -70,3 +70,4 @@
 - 完成30分鐘HMAC preview token與受信任inspector orchestration核心；token綁source checksum、mapping、strategy、target、capability與schema fingerprint。實際CSV/JSON/SQL inspector保留M5B/M5C接入，不接受client自行聲稱fingerprint。
 - 完成90天AES-GCM transfer audit，記job建立、upload complete、preview、取消與download，details型別不接受原始資料、檔名或密碼；SQLite raw file無checksum/details明文。
 - 完成雙語transfer工作台：建立/列出/取消job、安全下載、查既有chunks後略過相同段、逐段PUT與整檔complete。M5A完整本機驗證：Vitest 74 files通過、3 integration files略過，300 tests通過、10 cases略過；ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases按設定略過。
+- M5A以15筆English plain原子提交推送main；GitHub Actions run `30627658026` 的quality、Docker、三瀏覽器、PostgreSQL 9.6/17及MySQL 5.6/8.4全部通過。僅GitHub官方actions v4的Node 20 runtime淘汰提醒，非產品失敗。
