@@ -60,6 +60,8 @@ export function buildDdlStatements(
     case 'create-table': {
       if (command.columns.length === 0) throw new DdlValidationError('DDL_INVALID_TYPE_ARGUMENT')
       const columns = command.columns.map((column) => renderColumn(capabilities, column, quote))
+      const primaryKey = renderCreateTablePrimaryKey(capabilities, command.columns, command.primaryKey, quote)
+      if (primaryKey) columns.push(primaryKey)
       const options = capabilities.engine === 'mysql'
         ? renderMysqlTableOptions(command.engine, command.charset, command.collation)
         : requireNoStorageOptions(command.engine, command.charset, command.collation)
@@ -129,6 +131,27 @@ export function buildDdlStatements(
       requireCapability(capabilities.constraint[constraintCapabilityKey(command.constraintKind)])
       return [`ALTER TABLE ${qualified(command.schema, command.table)} ${renderMysqlDropConstraint(command.constraintKind, command.name, quote)}`]
   }
+}
+
+function renderCreateTablePrimaryKey(
+  capabilities: DdlCapabilities,
+  columns: DdlColumnDefinition[],
+  primaryKey: string[] | undefined,
+  quote: (value: string) => string,
+): string | undefined {
+  const columnNames = new Set(columns.map((column) => column.name))
+  if (primaryKey !== undefined) {
+    if (primaryKey.length === 0 || new Set(primaryKey).size !== primaryKey.length || primaryKey.some((name) => !columnNames.has(name))) {
+      throw new DdlValidationError('DDL_INVALID_OPTION')
+    }
+  }
+  if (capabilities.engine === 'mysql') {
+    const identityColumns = columns.filter((column) => column.identity).map((column) => column.name)
+    if (identityColumns.some((name) => !primaryKey?.includes(name))) {
+      throw new DdlValidationError('DDL_INVALID_OPTION')
+    }
+  }
+  return primaryKey ? `PRIMARY KEY (${primaryKey.map((name) => quoteName(name, quote)).join(', ')})` : undefined
 }
 
 function renderIndexPart(

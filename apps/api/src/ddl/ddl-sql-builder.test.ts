@@ -72,12 +72,20 @@ describe('buildDdlStatements', () => {
         type: { name: 'varchar', length: 255 },
         nullable: false,
       }],
+      primaryKey: ['id'],
       engine: 'InnoDB',
       charset: 'utf8mb4',
       collation: 'utf8mb4_unicode_ci',
     })).toEqual([
-      'CREATE TABLE `app`.`orders` (`id` bigint AUTO_INCREMENT NOT NULL, `title` varchar(255) NOT NULL) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci',
+      'CREATE TABLE `app`.`orders` (`id` bigint AUTO_INCREMENT NOT NULL, `title` varchar(255) NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci',
     ])
+
+    expect(() => buildDdlStatements(mysql56, {
+      kind: 'create-table',
+      schema: 'app',
+      name: 'invalid_identity',
+      columns: [{ name: 'id', type: { name: 'bigint' }, nullable: false, identity: true }],
+    })).toThrow(new DdlValidationError('DDL_INVALID_OPTION'))
   })
 
   it('MySQL 5.6 rename column要求完整定義，8.4使用原生語法', () => {

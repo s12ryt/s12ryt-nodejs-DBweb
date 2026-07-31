@@ -72,6 +72,7 @@ export type DdlCommand =
       schema: string
       name: string
       columns: DdlColumnDefinition[]
+      primaryKey?: string[]
       engine?: string
       charset?: string
       collation?: string
