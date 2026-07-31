@@ -100,6 +100,7 @@ describe.runIf(engine === 'mysql')('MySQL DDL integration', () => {
           { name: 'id', type: { name: 'int' }, nullable: false, identity: true },
           { name: 'code', type: { name: 'varchar', length: 50 }, nullable: false },
         ],
+        primaryKey: ['id'],
       })
       await run(gateway, capabilities, {
         kind: 'add-column', schema: database, table: 'dbweb_ddl_test',
