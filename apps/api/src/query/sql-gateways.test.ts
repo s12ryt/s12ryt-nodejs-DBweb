@@ -71,6 +71,30 @@ describe('PostgresSqlGateway', () => {
     expect(factory.mock.calls[0]?.[0].stream?.()).toBe(channel)
     expect(destroy).toHaveBeenCalledOnce()
   })
+
+  it('唯讀查詢在唯讀交易中執行並提交', async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ value: 1 }], fields: [{ name: 'value' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [] })
+    const client = { connect: vi.fn(), query, end: vi.fn() }
+    const gateway = new PostgresSqlGateway(() => client)
+
+    await gateway.execute(connection, {
+      sql: 'SELECT 1', timeoutMs: 30_000, maxRows: 1001,
+      signal: new AbortController().signal, readOnly: true,
+    })
+
+    expect(query.mock.calls.map(([statement]) =>
+      typeof statement === 'string' ? statement : statement.text)).toEqual([
+      'SET statement_timeout = 30000',
+      'BEGIN READ ONLY',
+      'SELECT 1',
+      'COMMIT',
+    ])
+  })
 })
 
 describe('MysqlSqlGateway', () => {
@@ -117,5 +141,28 @@ describe('MysqlSqlGateway', () => {
 
     expect(factory).toHaveBeenCalledWith(expect.objectContaining({ stream: channel }))
     expect(destroy).toHaveBeenCalledOnce()
+  })
+
+  it('唯讀查詢停用多語句並在唯讀交易中執行', async () => {
+    const query = vi
+      .fn<MysqlConnectionLike['query']>()
+      .mockResolvedValueOnce([[], []])
+      .mockResolvedValueOnce([[{ value: 1 }], [{ name: 'value' }]])
+      .mockResolvedValueOnce([[], []])
+    const client: MysqlConnectionLike = { query, end: vi.fn(), destroy: vi.fn() }
+    const factory = vi.fn<MysqlConnectionFactory>(async () => client)
+    const gateway = new MysqlSqlGateway(factory)
+
+    await gateway.execute({ ...connection, engine: 'mysql', port: 3306 }, {
+      sql: 'SELECT 1', timeoutMs: 30_000, maxRows: 1001,
+      signal: new AbortController().signal, readOnly: true,
+    })
+
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({ multipleStatements: false }))
+    expect(query.mock.calls.map(([statement]) => statement)).toEqual([
+      'START TRANSACTION READ ONLY',
+      'SELECT 1',
+      'COMMIT',
+    ])
   })
 })

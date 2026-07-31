@@ -20,21 +20,43 @@ export class MysqlSqlGateway implements SqlGateway {
 
   async execute(
     connection: ResolvedConnection,
-    request: { sql: string; timeoutMs: number; maxRows: number; signal: AbortSignal },
+    request: {
+      sql: string
+      timeoutMs: number
+      maxRows: number
+      signal: AbortSignal
+      readOnly?: boolean
+    },
   ): Promise<SqlGatewayResult> {
     let client: MysqlConnectionLike | undefined
     let socket: Duplex | undefined
+    let transactionStarted = false
     const abort = () => client?.destroy?.()
     try {
       socket = await this.socketProvider?.open(connection)
       client = await this.createConnection({
         ...mysqlClientOptions(connection, socket),
-        multipleStatements: true,
+        multipleStatements: !request.readOnly,
       })
       request.signal.addEventListener('abort', abort, { once: true })
+      if (request.readOnly) {
+        await client.query('START TRANSACTION READ ONLY')
+        transactionStarted = true
+      }
       const [rawRows, rawFields] = await client.query(request.sql)
+      if (transactionStarted) {
+        await client.query('COMMIT')
+        transactionStarted = false
+      }
       return collectMysqlResults(rawRows, rawFields, request.maxRows)
     } catch {
+      if (transactionStarted) {
+        try {
+          await client?.query('ROLLBACK')
+        } catch {
+          // Rollback failure must not expose or replace the safe query error.
+        }
+      }
       throw new DatabaseConnectionError()
     } finally {
       request.signal.removeEventListener('abort', abort)

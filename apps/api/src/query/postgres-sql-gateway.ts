@@ -20,19 +20,41 @@ export class PostgresSqlGateway implements SqlGateway {
 
   async execute(
     connection: ResolvedConnection,
-    request: { sql: string; timeoutMs: number; maxRows: number; signal: AbortSignal },
+    request: {
+      sql: string
+      timeoutMs: number
+      maxRows: number
+      signal: AbortSignal
+      readOnly?: boolean
+    },
   ): Promise<SqlGatewayResult> {
     let client: PostgresClientLike | undefined
     let socket: Duplex | undefined
+    let transactionStarted = false
     try {
       socket = await this.socketProvider?.open(connection)
       client = this.createClient(postgresClientConfig(connection, socket))
       await client.connect()
       await client.query(`SET statement_timeout = ${request.timeoutMs}`)
+      if (request.readOnly) {
+        await client.query('BEGIN READ ONLY')
+        transactionStarted = true
+      }
       const raw = await client.query({ text: request.sql, signal: request.signal })
+      if (transactionStarted) {
+        await client.query('COMMIT')
+        transactionStarted = false
+      }
       const results = Array.isArray(raw) ? raw : [raw]
       return collectPostgresResults(results, request.maxRows)
     } catch {
+      if (transactionStarted) {
+        try {
+          await client?.query('ROLLBACK')
+        } catch {
+          // Rollback failure must not expose or replace the safe query error.
+        }
+      }
       throw new DatabaseConnectionError()
     } finally {
       try {
