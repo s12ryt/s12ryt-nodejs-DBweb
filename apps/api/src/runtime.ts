@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { FastifyInstance } from 'fastify'
@@ -49,6 +49,8 @@ import {
   KyselySshHostKeyResetRecorder,
   KyselySshKnownHostRepository,
 } from './metadata/kysely-ssh-known-host-repository.js'
+import { KyselyTransferJobRepository } from './metadata/kysely-transfer-job-repository.js'
+import { KyselyTransferAuditRepository } from './metadata/kysely-transfer-audit-repository.js'
 import { KyselyWebAccessRepository } from './metadata/kysely-web-access-repository.js'
 import {
   createMetadataDatabase,
@@ -63,6 +65,15 @@ import { EncryptedSecurityAuditRecorder } from './security/security-audit.js'
 import { SshKnownHostService } from './ssh/ssh-known-host-service.js'
 import { Ssh2TransportFactory } from './ssh/ssh2-transport-factory.js'
 import { SshTunnelPool, type SshTransportFactory } from './ssh/ssh-tunnel-pool.js'
+import { EncryptedChunkStore } from './transfers/encrypted-chunk-store.js'
+import { EncryptedTransferAuditRecorder, type TransferAuditRecorder } from './transfers/transfer-audit.js'
+import {
+  TransferCleanupScheduler,
+  TransferCleanupService,
+} from './transfers/transfer-cleanup-service.js'
+import { TransferDownloadService } from './transfers/transfer-download-service.js'
+import { type CreateTransferJobInput, TransferJobService } from './transfers/transfer-job.js'
+import { TransferUploadService } from './transfers/transfer-upload-service.js'
 
 export interface RuntimeConfig {
   host: string
@@ -72,11 +83,16 @@ export interface RuntimeConfig {
   masterKey: Buffer
   adminUsername: string
   adminPassword: string
+  transferRoot?: string
   staticRoot?: string
 }
 
 export interface RuntimeDependencies {
   createSshTransportFactory?: (knownHosts: SshKnownHostService) => SshTransportFactory
+  createTransferCleanupScheduler?: (
+    service: TransferCleanupService,
+  ) => Pick<TransferCleanupScheduler, 'start' | 'stop'>
+  transferAuditRecorder?: TransferAuditRecorder
 }
 
 type RuntimeErrorCode =
@@ -126,6 +142,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv | Record<string, string
   }
 
   const production = env.NODE_ENV === 'production'
+  const transferRoot = resolve(env.DBWEB_TRANSFER_ROOT ?? './data/transfers')
   const staticRoot = env.DBWEB_WEB_ROOT
     ? resolve(env.DBWEB_WEB_ROOT)
     : production
@@ -140,6 +157,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv | Record<string, string
     masterKey,
     adminUsername: env.DBWEB_ADMIN_USERNAME?.trim() || 'admin',
     adminPassword,
+    transferRoot,
     ...(staticRoot ? { staticRoot } : {}),
   }
 }
@@ -154,6 +172,7 @@ export async function buildRuntime(
   const database = createMetadataDatabase(config.metadata)
   let tunnelPool: SshTunnelPool | undefined
   let nativeAccountScheduler: NativeAccountVerificationScheduler | undefined
+  let transferCleanupScheduler: Pick<TransferCleanupScheduler, 'start' | 'stop'> | undefined
   try {
     await migrateMetadata(database)
     const encryption = new EnvelopeEncryption(config.masterKey)
@@ -277,6 +296,49 @@ export async function buildRuntime(
       securityAudit,
     )
     nativeAccountScheduler = new NativeAccountVerificationScheduler(nativeAccountVerifier)
+    const transferJobRepository = new KyselyTransferJobRepository(database)
+    const transferAuditRepository = new KyselyTransferAuditRepository(database)
+    const transferAudit = dependencies.transferAuditRecorder
+      ?? new EncryptedTransferAuditRecorder(transferAuditRepository, encryption)
+    const transferJobService = new TransferJobService(
+      transferJobRepository,
+      (actor, input) => authorizeTransfer(webAccessService, actor, input),
+      undefined,
+      transferAudit,
+    )
+    const transferRoot = config.transferRoot ?? resolve('./data/transfers')
+    const transferSourceStore = new EncryptedChunkStore({
+      root: join(transferRoot, 'source'),
+      encryption,
+      purposeNamespace: 'source',
+    })
+    const transferOutputStore = new EncryptedChunkStore({
+      root: join(transferRoot, 'output'),
+      encryption,
+      purposeNamespace: 'output',
+    })
+    const transferUploadService = new TransferUploadService(
+      transferJobService,
+      transferSourceStore,
+      undefined,
+      undefined,
+      (actor, job) => authorizeTransfer(webAccessService, actor, job),
+      transferAudit,
+    )
+    const transferDownloadService = new TransferDownloadService(
+      transferJobService,
+      transferOutputStore,
+      (actor, job) => authorizeTransfer(webAccessService, actor, job),
+      transferAudit,
+    )
+    const transferCleanupService = new TransferCleanupService(
+      transferJobRepository,
+      [transferSourceStore, transferOutputStore],
+      [transferAuditRepository],
+    )
+    transferCleanupScheduler = dependencies.createTransferCleanupScheduler?.(
+      transferCleanupService,
+    ) ?? new TransferCleanupScheduler(transferCleanupService)
     const keepAliveService = new SqlKeepAliveService(
       connectionService,
       sqlGateways,
@@ -295,6 +357,9 @@ export async function buildRuntime(
       queryService,
       nativeAccountService,
       nativeGrantService,
+      transferJobService,
+      transferUploadService,
+      transferDownloadService,
       sshKnownHostService: knownHosts,
       webAccessService,
       csrfSecret,
@@ -303,7 +368,9 @@ export async function buildRuntime(
     })
     keepAliveScheduler.start()
     nativeAccountScheduler.start()
+    transferCleanupScheduler.start()
     app.addHook('onClose', async () => {
+      await transferCleanupScheduler?.stop()
       await nativeAccountScheduler?.stop()
       await keepAliveScheduler.stop()
       await tunnelPool?.close()
@@ -311,11 +378,29 @@ export async function buildRuntime(
     })
     return app
   } catch (error) {
+    await transferCleanupScheduler?.stop()
     await nativeAccountScheduler?.stop()
     await tunnelPool?.close()
     await database.destroy()
     throw error
   }
+}
+
+async function authorizeTransfer(
+  access: WebAccessService,
+  actor: { id: string; role: 'admin' | 'user' },
+  input: CreateTransferJobInput,
+): Promise<boolean> {
+  if (input.direction === 'import') {
+    if (input.format === 'sql') {
+      return await access.can(actor, input.connectionId, 'data-write')
+        && await access.can(actor, input.connectionId, 'ddl-write')
+    }
+    return access.can(actor, input.connectionId, 'data-write')
+  }
+  if (input.format !== 'sql') return access.can(actor, input.connectionId, 'data-read')
+  return await access.can(actor, input.connectionId, 'structure-read')
+    && (input.includeData === false || await access.can(actor, input.connectionId, 'data-read'))
 }
 
 function decodeMasterKey(value: string | undefined): Buffer {

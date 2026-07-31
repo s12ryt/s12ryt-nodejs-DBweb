@@ -10,6 +10,8 @@ import { createMetadataDatabase, migrateMetadata } from './metadata/metadata-dat
 import { buildRuntime, loadRuntimeConfig, RuntimeConfigError } from './runtime.js'
 import type { SshKnownHostService } from './ssh/ssh-known-host-service.js'
 import type { SshTransportFactory } from './ssh/ssh-tunnel-pool.js'
+import type { TransferCleanupService } from './transfers/transfer-cleanup-service.js'
+import type { TransferAuditRecorder } from './transfers/transfer-audit.js'
 
 describe('runtime', () => {
   it('拒絕遺漏或長度錯誤的 master key，以及弱 bootstrap 密碼', () => {
@@ -44,6 +46,9 @@ describe('runtime', () => {
       loadRuntimeConfig({ ...base, NODE_ENV: 'production', DBWEB_WEB_ROOT: './custom-web' })
         .staticRoot,
     ).toBe(resolve('./custom-web'))
+    expect(loadRuntimeConfig(base).transferRoot).toBe(resolve('./data/transfers'))
+    expect(loadRuntimeConfig({ ...base, DBWEB_TRANSFER_ROOT: './custom-transfers' }).transferRoot)
+      .toBe(resolve('./custom-transfers'))
   })
 
   it('組裝 SQLite runtime、bootstrap 管理員，重開後可登入且不重複建立', async () => {
@@ -113,6 +118,14 @@ describe('runtime', () => {
       void knownHosts
       return transportFactory
     })
+    const cleanupStart = vi.fn()
+    const cleanupStop = vi.fn(async () => undefined)
+    const transferAuditRecord = vi.fn(async () => undefined)
+    const transferAuditRecorder: TransferAuditRecorder = { record: transferAuditRecord }
+    const createTransferCleanupScheduler = vi.fn((service: TransferCleanupService) => {
+      void service
+      return { start: cleanupStart, stop: cleanupStop }
+    })
     const app = await buildRuntime({
       host: '127.0.0.1',
       port: 3000,
@@ -121,10 +134,12 @@ describe('runtime', () => {
       masterKey: Buffer.alloc(32, 11),
       adminUsername: 'admin',
       adminPassword: 'bootstrap-admin-password',
-    }, { createSshTransportFactory })
+    }, { createSshTransportFactory, createTransferCleanupScheduler, transferAuditRecorder })
 
     expect(createSshTransportFactory).toHaveBeenCalledOnce()
     expect(createSshTransportFactory.mock.calls[0]?.[0]).toBeDefined()
+    expect(createTransferCleanupScheduler).toHaveBeenCalledOnce()
+    expect(cleanupStart).toHaveBeenCalledOnce()
     expect((await app.inject({
       method: 'GET',
       url: '/api/connections/c1/schemas/public/tables/orders/mutations',
@@ -141,6 +156,33 @@ describe('runtime', () => {
       method: 'GET',
       url: '/api/connections/c1/accounts/grants?targetDatabase=app&engine=postgres&username=reader',
     })).statusCode).toBe(401)
+    expect((await app.inject({
+      method: 'GET',
+      url: '/api/transfers',
+    })).statusCode).toBe(401)
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'admin', password: 'bootstrap-admin-password' },
+    })
+    const session = login.json<{ csrfToken: string }>()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/transfers',
+      headers: {
+        cookie: login.headers['set-cookie'] as string,
+        'x-csrf-token': session.csrfToken,
+      },
+      payload: { connectionId: 'c1', direction: 'export', format: 'csv' },
+    })
+    expect(created.statusCode).toBe(201)
+    expect(transferAuditRecord).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: expect.any(String),
+      connectionId: 'c1',
+      action: 'job-create',
+      status: 'success',
+    }))
     await expect(app.close()).resolves.toBeUndefined()
+    expect(cleanupStop).toHaveBeenCalledOnce()
   }, 20_000)
 })
