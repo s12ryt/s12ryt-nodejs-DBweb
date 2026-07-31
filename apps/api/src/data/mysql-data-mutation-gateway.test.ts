@@ -22,11 +22,11 @@ describe('MysqlDataMutationGateway', () => {
     const query = vi
       .fn()
       .mockResolvedValueOnce([[{
-        dbweb_column_name: 'id', dbweb_data_type: 'bigint', dbweb_column_type: 'bigint(20)', dbweb_is_nullable: 'NO', dbweb_extra: 'auto_increment',
+        dbweb_column_name: 'id', dbweb_data_type: 'bigint', dbweb_column_type: 'bigint(20)', dbweb_is_nullable: 'NO', dbweb_extra: 'auto_increment', dbweb_column_default: null,
       }, {
-        dbweb_column_name: 'email', dbweb_data_type: 'varchar', dbweb_column_type: 'varchar(255)', dbweb_is_nullable: 'NO', dbweb_extra: '',
+        dbweb_column_name: 'email', dbweb_data_type: 'varchar', dbweb_column_type: 'varchar(255)', dbweb_is_nullable: 'NO', dbweb_extra: '', dbweb_column_default: 'unknown',
       }, {
-        dbweb_column_name: 'payload', dbweb_data_type: 'json', dbweb_column_type: 'json', dbweb_is_nullable: 'YES', dbweb_extra: '',
+        dbweb_column_name: 'payload', dbweb_data_type: 'json', dbweb_column_type: 'json', dbweb_is_nullable: 'YES', dbweb_extra: '', dbweb_column_default: null,
       }], []])
       .mockResolvedValueOnce([[
         { dbweb_key_name: 'PRIMARY', dbweb_column_name: 'id', dbweb_sequence: 1 },
@@ -45,9 +45,9 @@ describe('MysqlDataMutationGateway', () => {
       schema: 'app',
       name: 'orders',
       columns: [
-        { name: 'id', valueType: 'bigint', nullable: false, generated: true },
-        { name: 'email', valueType: 'string', nullable: false, generated: false },
-        { name: 'payload', valueType: 'json', nullable: true, generated: false },
+        { name: 'id', valueType: 'bigint', nullable: false, generated: true, hasDefault: true },
+        { name: 'email', valueType: 'string', nullable: false, generated: false, hasDefault: true },
+        { name: 'payload', valueType: 'json', nullable: true, generated: false, hasDefault: false },
       ],
       uniqueKeys: [
         { name: 'PRIMARY', kind: 'primary', columns: ['id'] },

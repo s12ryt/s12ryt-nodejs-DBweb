@@ -48,7 +48,8 @@ export class MysqlDataMutationGateway implements DataMutationGateway {
                 data_type AS dbweb_data_type,
                 column_type AS dbweb_column_type,
                 is_nullable AS dbweb_is_nullable,
-                extra AS dbweb_extra
+                extra AS dbweb_extra,
+                column_default AS dbweb_column_default
          FROM information_schema.columns
          WHERE table_schema = ? AND table_name = ?
          ORDER BY ordinal_position`,
@@ -67,12 +68,16 @@ export class MysqlDataMutationGateway implements DataMutationGateway {
       return {
         schema,
         name: table,
-        columns: columns.map((row) => ({
-           name: String(row.dbweb_column_name),
-           valueType: mysqlValueType(String(row.dbweb_data_type), String(row.dbweb_column_type)),
-           nullable: row.dbweb_is_nullable === 'YES',
-           generated: /(?:auto_increment|generated)/i.test(String(row.dbweb_extra ?? '')),
-        })),
+        columns: columns.map((row) => {
+          const generated = /(?:auto_increment|generated)/i.test(String(row.dbweb_extra ?? ''))
+          return {
+            name: String(row.dbweb_column_name),
+            valueType: mysqlValueType(String(row.dbweb_data_type), String(row.dbweb_column_type)),
+            nullable: row.dbweb_is_nullable === 'YES',
+            generated,
+            hasDefault: generated || row.dbweb_column_default != null,
+          }
+        }),
         uniqueKeys: mapMysqlKeys(asRows(rawKeys)),
       }
     })
