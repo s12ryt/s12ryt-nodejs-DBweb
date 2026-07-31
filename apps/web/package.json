@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit --pretty false && tsc -p tsconfig.node.json --noEmit --pretty false"
   },
   "dependencies": {
+    "@noble/hashes": "2.2.0",
     "@vitejs/plugin-react": "6.0.1",
     "lucide-react": "0.544.0",
     "react": "19.2.0",
