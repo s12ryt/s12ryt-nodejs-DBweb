@@ -11,6 +11,7 @@ import { Pool } from 'pg'
 import type { DdlCommand } from '../ddl/ddl-command.js'
 import type { DdlAuditEntry } from '../ddl/ddl-service.js'
 import type { SecurityAuditAction } from '../security/security-audit.js'
+import type { StoredNativeAccount } from '../accounts/native-account-service.js'
 
 interface UsersTable {
   id: string
@@ -151,6 +152,29 @@ interface SecurityAuditsTable {
   expires_at: string
 }
 
+interface ManagedNativeAccountsTable {
+  id: string
+  connection_id: string
+  identity_key: string
+  engine: 'postgres' | 'mysql'
+  username: string
+  host: string | null
+  encrypted_password: string
+  verification_database: string
+  verification_interval_ms: number
+  can_login: number
+  connection_limit: number
+  status: StoredNativeAccount['status']
+  verification_failures: number
+  next_verification_at: string
+  last_verified_at: string | null
+  retry_verification_at: string | null
+  deleted_at: string | null
+  recover_until: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface MetadataDatabase {
   auth_lifecycle_lock: AuthLifecycleLockTable
   users: UsersTable
@@ -158,6 +182,7 @@ export interface MetadataDatabase {
   connections: ConnectionsTable
   ddl_audits: DdlAuditsTable
   keepalive_events: KeepAliveEventsTable
+  managed_native_accounts: ManagedNativeAccountsTable
   mutation_audits: MutationAuditsTable
   query_audits: QueryAuditsTable
   security_audits: SecurityAuditsTable
@@ -309,6 +334,37 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .addColumn('ddl_write', 'integer', (column) => column.notNull().defaultTo(0))
     .addColumn('account_manage', 'integer', (column) => column.notNull().defaultTo(0))
     .addPrimaryKeyConstraint('web_access_assignments_primary_key', ['user_id', 'connection_id'])
+    .execute()
+
+  await database.schema
+    .createTable('managed_native_accounts')
+    .ifNotExists()
+    .addColumn('id', 'varchar(36)', (column) => column.primaryKey())
+    .addColumn('connection_id', 'varchar(36)', (column) =>
+      column.notNull().references('connections.id').onDelete('cascade'),
+    )
+    .addColumn('identity_key', 'varchar(512)', (column) => column.notNull())
+    .addColumn('engine', 'varchar(16)', (column) => column.notNull())
+    .addColumn('username', 'varchar(128)', (column) => column.notNull())
+    .addColumn('host', 'varchar(255)')
+    .addColumn('encrypted_password', 'text', (column) => column.notNull())
+    .addColumn('verification_database', 'varchar(128)', (column) => column.notNull())
+    .addColumn('verification_interval_ms', 'integer', (column) => column.notNull())
+    .addColumn('can_login', 'integer', (column) => column.notNull())
+    .addColumn('connection_limit', 'integer', (column) => column.notNull())
+    .addColumn('status', 'varchar(32)', (column) => column.notNull())
+    .addColumn('verification_failures', 'integer', (column) => column.notNull())
+    .addColumn('next_verification_at', 'varchar(35)', (column) => column.notNull())
+    .addColumn('last_verified_at', 'varchar(35)')
+    .addColumn('retry_verification_at', 'varchar(35)')
+    .addColumn('deleted_at', 'varchar(35)')
+    .addColumn('recover_until', 'varchar(35)')
+    .addColumn('created_at', 'varchar(35)', (column) => column.notNull())
+    .addColumn('updated_at', 'varchar(35)', (column) => column.notNull())
+    .addUniqueConstraint('managed_native_accounts_identity_unique', [
+      'connection_id',
+      'identity_key',
+    ])
     .execute()
 
   await database.schema
