@@ -25,6 +25,37 @@ describe('SQL restore plan', () => {
     ])
   })
 
+  it('creates partition children after their parent and before restoring parent data', () => {
+    const manifest = manifestFixture()
+    manifest.objects.push({
+      id: 'partition:public.orders.orders_low',
+      kind: 'partition',
+      schema: 'public',
+      name: 'orders_low',
+      dependencies: ['table:public.orders'],
+      createCommands: [{
+        kind: 'create-partition', schema: 'public', table: 'orders', name: 'orders_low',
+        definition: 'FOR VALUES FROM (0) TO (100)', confirmed: true,
+      }],
+      dropCommand: {
+        kind: 'drop-partition', schema: 'public', table: 'orders', name: 'orders_low', confirmed: true,
+      },
+    })
+
+    const plan = buildSqlRestorePlan(manifest, {
+      engine: 'postgres', targetDatabase: 'app_restore', existingObjectIds: [], mode: 'stop',
+      supportedKinds: ['schema', 'table', 'partition', 'view'],
+    })
+
+    expect(plan.steps.map((step) => `${step.phase}:${step.objectId}`)).toEqual([
+      'structure:schema:public',
+      'structure:table:public.orders',
+      'structure:partition:public.orders.orders_low',
+      'data:table:public.orders',
+      'dependent:view:public.order_view',
+    ])
+  })
+
   it('stops on existing objects unless an immutable drop plan is confirmed with the target database name', () => {
     const manifest = manifestFixture()
     const input = {

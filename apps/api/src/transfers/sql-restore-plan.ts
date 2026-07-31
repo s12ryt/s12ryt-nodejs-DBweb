@@ -135,7 +135,7 @@ function uniqueKnownIds(ids: string[], objects: ReadonlyMap<string, SqlDumpObjec
 }
 
 function phaseFor(kind: SqlDumpObjectKind): SqlRestoreStep['phase'] {
-  return ['schema', 'type', 'domain', 'sequence', 'table'].includes(kind) ? 'structure' : 'dependent'
+  return ['schema', 'type', 'domain', 'sequence', 'table', 'partition'].includes(kind) ? 'structure' : 'dependent'
 }
 
 function phaseRank(phase: SqlRestoreStep['phase']): number {
