@@ -45,6 +45,7 @@ export class MemoryAuthRepository implements AuthRepository {
       this.enabledAdminCount() <= 1
     ) return 'last-enabled-admin'
     Object.assign(user, changes)
+    user.sessionRevision += 1
     this.deleteSessionsByUserId(id)
     return 'updated'
   }
@@ -70,6 +71,15 @@ export class MemoryAuthRepository implements AuthRepository {
   async createSession(session: StoredSession): Promise<void> {
     this.sessions.set(session.id, structuredClone(session))
     this.sessionIdsByTokenHash.set(session.tokenHash, session.id)
+  }
+
+  async findSessionAuthority(tokenHash: string) {
+    const sessionId = this.sessionIdsByTokenHash.get(tokenHash)
+    const session = sessionId ? this.sessions.get(sessionId) : undefined
+    const user = session ? this.users.get(session.userId) : undefined
+    return session && user
+      ? { sessionId: session.id, userId: session.userId, sessionRevision: user.sessionRevision }
+      : undefined
   }
 
   async findSessionByTokenHash(tokenHash: string): Promise<StoredSession | undefined> {

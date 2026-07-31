@@ -99,6 +99,7 @@ export class AuthService {
       username: input.username.trim(),
       normalizedUsername,
       passwordHash: await argon2.hash(input.password, this.passwordHashOptions),
+      sessionRevision: 0,
       role: input.role,
       enabled: true,
       passwordChangeRequired: false,

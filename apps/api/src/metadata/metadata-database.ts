@@ -23,6 +23,7 @@ interface UsersTable {
   role: 'admin' | 'user'
   enabled: Generated<number>
   password_change_required: Generated<number>
+  session_revision: Generated<number>
   created_at: string
 }
 
@@ -198,6 +199,12 @@ interface TransferJobsTable {
   source_bytes: number | null
   source_checksum: string | null
   upload_completed_at: string | null
+  execution_requested_at: string | null
+  execution_requested_by: string | null
+  lease_owner: string | null
+  lease_expires_at: string | null
+  attempt_count: number
+  next_attempt_at: string | null
   created_at: string
   updated_at: string
   expires_at: string
@@ -283,6 +290,7 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .addColumn('role', 'varchar(16)', (column) => column.notNull())
     .addColumn('enabled', 'integer', (column) => column.notNull().defaultTo(1))
     .addColumn('password_change_required', 'integer', (column) => column.notNull().defaultTo(0))
+    .addColumn('session_revision', 'integer', (column) => column.notNull().defaultTo(0))
     .addColumn('created_at', 'varchar(35)', (column) => column.notNull())
     .execute()
 
@@ -298,6 +306,12 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     await database.schema
       .alterTable('users')
       .addColumn('password_change_required', 'integer', (column) => column.notNull().defaultTo(0))
+      .execute()
+  }
+  if (!userColumns.has('session_revision')) {
+    await database.schema
+      .alterTable('users')
+      .addColumn('session_revision', 'integer', (column) => column.notNull().defaultTo(0))
       .execute()
   }
 
@@ -451,6 +465,12 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .addColumn('source_bytes', 'integer')
     .addColumn('source_checksum', 'varchar(64)')
     .addColumn('upload_completed_at', 'varchar(35)')
+    .addColumn('execution_requested_at', 'varchar(35)')
+    .addColumn('execution_requested_by', 'varchar(36)')
+    .addColumn('lease_owner', 'varchar(200)')
+    .addColumn('lease_expires_at', 'varchar(35)')
+    .addColumn('attempt_count', 'integer', (column) => column.notNull().defaultTo(0))
+    .addColumn('next_attempt_at', 'varchar(35)')
     .addColumn('created_at', 'varchar(35)', (column) => column.notNull())
     .addColumn('updated_at', 'varchar(35)', (column) => column.notNull())
     .addColumn('expires_at', 'varchar(35)', (column) => column.notNull())
@@ -479,6 +499,33 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
       .alterTable('transfer_jobs')
       .addColumn('upload_completed_at', 'varchar(35)')
       .execute()
+  }
+  if (!transferJobColumns.has('execution_requested_at')) {
+    await database.schema
+      .alterTable('transfer_jobs')
+      .addColumn('execution_requested_at', 'varchar(35)')
+      .execute()
+  }
+  if (!transferJobColumns.has('execution_requested_by')) {
+    await database.schema
+      .alterTable('transfer_jobs')
+      .addColumn('execution_requested_by', 'varchar(36)')
+      .execute()
+  }
+  if (!transferJobColumns.has('lease_owner')) {
+    await database.schema.alterTable('transfer_jobs').addColumn('lease_owner', 'varchar(200)').execute()
+  }
+  if (!transferJobColumns.has('lease_expires_at')) {
+    await database.schema.alterTable('transfer_jobs').addColumn('lease_expires_at', 'varchar(35)').execute()
+  }
+  if (!transferJobColumns.has('attempt_count')) {
+    await database.schema
+      .alterTable('transfer_jobs')
+      .addColumn('attempt_count', 'integer', (column) => column.notNull().defaultTo(0))
+      .execute()
+  }
+  if (!transferJobColumns.has('next_attempt_at')) {
+    await database.schema.alterTable('transfer_jobs').addColumn('next_attempt_at', 'varchar(35)').execute()
   }
 
   await database.schema

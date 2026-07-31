@@ -11,6 +11,7 @@ export interface AuthUser {
 export interface StoredUser extends AuthUser {
   normalizedUsername: string
   passwordHash: string
+  sessionRevision: number
   createdAt: string
 }
 
@@ -38,9 +39,16 @@ export interface AuthRepository {
     protectLastEnabledAdmin: boolean,
   ): Promise<UserLifecycleMutationResult>
   createSession(session: StoredSession): Promise<void>
+  findSessionAuthority(tokenHash: string): Promise<SessionAuthority | undefined>
   findSessionByTokenHash(tokenHash: string): Promise<StoredSession | undefined>
   touchSession(id: string, lastSeenAt: string): Promise<void>
   deleteSession(id: string): Promise<void>
+}
+
+export interface SessionAuthority {
+  sessionId: string
+  userId: string
+  sessionRevision: number
 }
 
 export type UserLifecycleMutationResult = 'updated' | 'not-found' | 'last-enabled-admin'

@@ -29,6 +29,7 @@ export class KyselyAuthRepository implements AuthRepository {
           role: user.role,
           enabled: user.enabled ? 1 : 0,
           password_change_required: user.passwordChangeRequired ? 1 : 0,
+          session_revision: user.sessionRevision,
           created_at: user.createdAt,
         })
         .execute()
@@ -91,6 +92,7 @@ export class KyselyAuthRepository implements AuthRepository {
             : { password_change_required: changes.passwordChangeRequired ? 1 : 0 }),
           ...(changes.passwordHash === undefined ? {} : { password_hash: changes.passwordHash }),
           ...(changes.role === undefined ? {} : { role: changes.role }),
+          session_revision: sql<number>`session_revision + 1`,
         })
         .where('id', '=', id)
         .execute()
@@ -155,6 +157,23 @@ export class KyselyAuthRepository implements AuthRepository {
     }
   }
 
+  async findSessionAuthority(tokenHash: string) {
+    const row = await this.database.selectFrom('sessions')
+      .innerJoin('users', 'users.id', 'sessions.user_id')
+      .select([
+        'sessions.id as session_id',
+        'sessions.user_id as user_id',
+        'users.session_revision as session_revision',
+      ])
+      .where('sessions.token_hash', '=', tokenHash)
+      .executeTakeFirst()
+    return row ? {
+      sessionId: row.session_id,
+      userId: row.user_id,
+      sessionRevision: row.session_revision,
+    } : undefined
+  }
+
   async touchSession(id: string, lastSeenAt: string): Promise<void> {
     await this.database
       .updateTable('sessions')
@@ -175,6 +194,7 @@ export class KyselyAuthRepository implements AuthRepository {
     role: 'admin' | 'user'
     enabled: number
     password_change_required: number
+    session_revision: number
     created_at: string
   }): StoredUser {
     return {
@@ -185,6 +205,7 @@ export class KyselyAuthRepository implements AuthRepository {
       role: user.role,
       enabled: user.enabled === 1,
       passwordChangeRequired: user.password_change_required === 1,
+      sessionRevision: user.session_revision,
       createdAt: user.created_at,
     }
   }
