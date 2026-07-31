@@ -36,6 +36,39 @@ const table: MutationTable = {
 }
 
 describe('PostgresTransferDataGateway', () => {
+  it('streams multiple tables inside one repeatable read-only snapshot', async () => {
+    const statements: string[] = []
+    const cursors = [
+      { read: vi.fn().mockResolvedValueOnce([{ id: '1', note: 'first' }]).mockResolvedValueOnce([]), close: vi.fn() },
+      { read: vi.fn().mockResolvedValueOnce([{ id: '2', note: 'second' }]).mockResolvedValueOnce([]), close: vi.fn() },
+    ]
+    let cursorIndex = 0
+    const client = {
+      connect: vi.fn(),
+      query: vi.fn((input: string | { marker: 'cursor' }) => {
+        if (typeof input === 'string') { statements.push(input); return Promise.resolve({ rows: [] }) }
+        return cursors[cursorIndex++]
+      }) as unknown as PostgresTransferClient['query'],
+      end: vi.fn(),
+    }
+    const gateway = new PostgresTransferDataGateway(
+      () => client,
+      () => ({ marker: 'cursor' }) as never,
+    )
+
+    const rows = []
+    for await (const row of gateway.streamMany(connection, [
+      { id: 'orders-a', request: { table, filters: [], batchSize: 100 } },
+      { id: 'orders-b', request: { table, filters: [], batchSize: 100 } },
+    ])) rows.push(row)
+
+    expect(rows.map((value) => [value.id, value.row.id])).toEqual([
+      ['orders-a', { kind: 'value', type: 'bigint', value: '1' }],
+      ['orders-b', { kind: 'value', type: 'bigint', value: '2' }],
+    ])
+    expect(statements).toEqual(['BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', 'COMMIT'])
+  })
+
   it('streams tagged rows through a repeatable read-only cursor transaction', async () => {
     const statements: Array<{ sql: string; values?: unknown[] }> = []
     const cursor = {
@@ -133,6 +166,39 @@ describe('PostgresTransferDataGateway', () => {
 })
 
 describe('MysqlTransferDataGateway', () => {
+  it('streams multiple tables inside one consistent read-only snapshot', async () => {
+    const statements: string[] = []
+    const client = {
+      query: vi.fn((sql: string, values: unknown[] | ((error?: Error) => void), callback?: (error?: Error) => void) => {
+        statements.push(sql)
+        queueMicrotask(() => (typeof values === 'function' ? values : callback)?.())
+      }),
+      end: vi.fn((callback: (error?: Error) => void) => callback()),
+      destroy: vi.fn(),
+    }
+    const createRowStream = vi.fn()
+      .mockReturnValueOnce(Readable.from([{ id: '1', note: 'first' }], { objectMode: true }))
+      .mockReturnValueOnce(Readable.from([{ id: '2', note: 'second' }], { objectMode: true }))
+    const gateway = new MysqlTransferDataGateway(async () => client, createRowStream)
+
+    const rows = []
+    for await (const row of gateway.streamMany({ ...connection, engine: 'mysql', port: 3306 }, [
+      { id: 'orders-a', request: { table, filters: [], batchSize: 100 } },
+      { id: 'orders-b', request: { table, filters: [], batchSize: 100 } },
+    ])) rows.push(row)
+
+    expect(rows.map((value) => [value.id, value.row.id])).toEqual([
+      ['orders-a', { kind: 'value', type: 'bigint', value: '1' }],
+      ['orders-b', { kind: 'value', type: 'bigint', value: '2' }],
+    ])
+    expect(statements).toEqual([
+      'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ',
+      'START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY',
+      'COMMIT',
+    ])
+    expect(createRowStream).toHaveBeenCalledTimes(2)
+  })
+
   it('streams tagged rows from a consistent read-only snapshot with backpressure', async () => {
     const statements: Array<{ sql: string; values?: unknown[] }> = []
     const client = {

@@ -11,6 +11,8 @@ import { encodeDatabaseValue } from '../data/tagged-value.js'
 import {
   TransferDataError,
   type TransferDataGateway,
+  type TransferDataBatchRequest,
+  type TransferDataBatchRow,
   type TransferDataRequest,
   type TransferDataRow,
 } from './transfer-data-gateway.js'
@@ -47,38 +49,56 @@ export class PostgresTransferDataGateway implements TransferDataGateway {
     connection: ResolvedConnection,
     request: TransferDataRequest,
   ): AsyncIterable<TransferDataRow> {
-    validateRequest(request)
+    for await (const item of this.streamMany(connection, [{ id: 'single', request }])) {
+      yield item.row
+    }
+  }
+
+  async *streamMany(
+    connection: ResolvedConnection,
+    requests: TransferDataBatchRequest[],
+  ): AsyncIterable<TransferDataBatchRow> {
+    validateRequests(requests)
     let client: PostgresTransferClient | undefined
     let cursor: PostgresTransferCursor | undefined
     let socket: Duplex | undefined
     let committed = false
     let exhausted = false
+    let currentSignal: AbortSignal | undefined
     const abortCursor = () => {
       void cursor?.close().catch(() => undefined)
     }
 
     try {
-      throwIfAborted(request.signal)
       socket = await this.socketProvider?.open(connection)
       client = this.createClient(postgresClientConfig(connection, socket))
       await client.connect()
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
 
-      const filter = buildPostgresTransferFilter(request.table, request.filters)
-      const columns = request.table.columns.map((column) => quotePostgresIdentifier(column.name))
-      const sql = `SELECT ${columns.join(', ')} FROM ${quotePostgresIdentifier(request.table.schema)}.${quotePostgresIdentifier(request.table.name)}${filter.sql ? ` WHERE ${filter.sql}` : ''}`
-      cursor = client.query(this.createCursor(sql, filter.values))
-      request.signal?.addEventListener('abort', abortCursor, { once: true })
+      for (const batch of requests) {
+        const request = batch.request
+        throwIfAborted(request.signal)
+        const filter = buildPostgresTransferFilter(request.table, request.filters)
+        const columns = request.table.columns.map((column) => quotePostgresIdentifier(column.name))
+        const sql = `SELECT ${columns.join(', ')} FROM ${quotePostgresIdentifier(request.table.schema)}.${quotePostgresIdentifier(request.table.name)}${filter.sql ? ` WHERE ${filter.sql}` : ''}`
+        cursor = client.query(this.createCursor(sql, filter.values))
+        exhausted = false
+        currentSignal = request.signal
+        currentSignal?.addEventListener('abort', abortCursor, { once: true })
 
-      while (true) {
-        throwIfAborted(request.signal)
-        const rows = await cursor.read(request.batchSize)
-        throwIfAborted(request.signal)
-        if (rows.length === 0) {
-          exhausted = true
-          break
+        while (true) {
+          throwIfAborted(request.signal)
+          const rows = await cursor.read(request.batchSize)
+          throwIfAborted(request.signal)
+          if (rows.length === 0) {
+            exhausted = true
+            break
+          }
+          for (const row of rows) yield { id: batch.id, row: encodeRow(row, request) }
         }
-        for (const row of rows) yield encodeRow(row, request)
+        currentSignal?.removeEventListener('abort', abortCursor)
+        currentSignal = undefined
+        cursor = undefined
       }
 
       await client.query('COMMIT')
@@ -87,7 +107,7 @@ export class PostgresTransferDataGateway implements TransferDataGateway {
       if (error instanceof TransferDataError) throw error
       throw new TransferDataError('TRANSFER_DATA_FAILED')
     } finally {
-      request.signal?.removeEventListener('abort', abortCursor)
+      currentSignal?.removeEventListener('abort', abortCursor)
       if (cursor && !exhausted) {
         try {
           await cursor.close()
@@ -109,6 +129,16 @@ export class PostgresTransferDataGateway implements TransferDataGateway {
       }
       socket?.destroy()
     }
+  }
+}
+
+function validateRequests(requests: TransferDataBatchRequest[]): void {
+  if (requests.length === 0 || new Set(requests.map((batch) => batch.id)).size !== requests.length) {
+    throw new TransferDataError('INVALID_TRANSFER_DATA')
+  }
+  for (const batch of requests) {
+    if (!batch.id) throw new TransferDataError('INVALID_TRANSFER_DATA')
+    validateRequest(batch.request)
   }
 }
 

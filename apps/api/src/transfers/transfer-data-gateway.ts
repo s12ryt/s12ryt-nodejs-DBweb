@@ -17,6 +17,20 @@ export interface TransferDataGateway {
     connection: ResolvedConnection,
     request: TransferDataRequest,
   ): AsyncIterable<TransferDataRow>
+  streamMany?(
+    connection: ResolvedConnection,
+    requests: TransferDataBatchRequest[],
+  ): AsyncIterable<TransferDataBatchRow>
+}
+
+export interface TransferDataBatchRequest {
+  id: string
+  request: TransferDataRequest
+}
+
+export interface TransferDataBatchRow {
+  id: string
+  row: TransferDataRow
 }
 
 export type TransferDataErrorCode =

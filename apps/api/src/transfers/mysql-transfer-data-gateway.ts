@@ -10,6 +10,8 @@ import { encodeDatabaseValue } from '../data/tagged-value.js'
 import {
   TransferDataError,
   type TransferDataGateway,
+  type TransferDataBatchRequest,
+  type TransferDataBatchRow,
   type TransferDataRequest,
   type TransferDataRow,
 } from './transfer-data-gateway.js'
@@ -56,15 +58,24 @@ export class MysqlTransferDataGateway implements TransferDataGateway {
     connection: ResolvedConnection,
     request: TransferDataRequest,
   ): AsyncIterable<TransferDataRow> {
-    validateRequest(request)
+    for await (const item of this.streamMany(connection, [{ id: 'single', request }])) {
+      yield item.row
+    }
+  }
+
+  async *streamMany(
+    connection: ResolvedConnection,
+    requests: TransferDataBatchRequest[],
+  ): AsyncIterable<TransferDataBatchRow> {
+    validateRequests(requests)
     let client: MysqlTransferConnection | undefined
     let rowStream: Readable | undefined
     let socket: Duplex | undefined
     let committed = false
+    let currentSignal: AbortSignal | undefined
     const abortStream = () => rowStream?.destroy(new TransferDataError('TRANSFER_DATA_CANCELLED'))
 
     try {
-      throwIfAborted(request.signal)
       socket = await this.socketProvider?.open(connection)
       client = await this.createConnection({
         ...mysqlClientOptions(connection, socket),
@@ -75,16 +86,24 @@ export class MysqlTransferDataGateway implements TransferDataGateway {
       await query(client, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
       await query(client, 'START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY')
 
-      const filter = buildMysqlTransferFilter(request.table, request.filters)
-      const columns = request.table.columns.map((column) => quoteMysqlIdentifier(column.name))
-      const sql = `SELECT ${columns.join(', ')} FROM ${quoteMysqlIdentifier(request.table.schema)}.${quoteMysqlIdentifier(request.table.name)}${filter.sql ? ` WHERE ${filter.sql}` : ''}`
-      rowStream = this.createRowStream(client, sql, filter.values, request.batchSize)
-      request.signal?.addEventListener('abort', abortStream, { once: true })
-
-      for await (const rawRow of rowStream) {
+      for (const batch of requests) {
+        const request = batch.request
         throwIfAborted(request.signal)
-        if (!rawRow || typeof rawRow !== 'object') throw new TransferDataError('TRANSFER_DATA_FAILED')
-        yield encodeRow(rawRow as Record<string, unknown>, request)
+        const filter = buildMysqlTransferFilter(request.table, request.filters)
+        const columns = request.table.columns.map((column) => quoteMysqlIdentifier(column.name))
+        const sql = `SELECT ${columns.join(', ')} FROM ${quoteMysqlIdentifier(request.table.schema)}.${quoteMysqlIdentifier(request.table.name)}${filter.sql ? ` WHERE ${filter.sql}` : ''}`
+        rowStream = this.createRowStream(client, sql, filter.values, request.batchSize)
+        currentSignal = request.signal
+        currentSignal?.addEventListener('abort', abortStream, { once: true })
+
+        for await (const rawRow of rowStream) {
+          throwIfAborted(request.signal)
+          if (!rawRow || typeof rawRow !== 'object') throw new TransferDataError('TRANSFER_DATA_FAILED')
+          yield { id: batch.id, row: encodeRow(rawRow as Record<string, unknown>, request) }
+        }
+        currentSignal?.removeEventListener('abort', abortStream)
+        currentSignal = undefined
+        rowStream = undefined
       }
 
       await query(client, 'COMMIT')
@@ -93,7 +112,7 @@ export class MysqlTransferDataGateway implements TransferDataGateway {
       if (error instanceof TransferDataError) throw error
       throw new TransferDataError('TRANSFER_DATA_FAILED')
     } finally {
-      request.signal?.removeEventListener('abort', abortStream)
+      currentSignal?.removeEventListener('abort', abortStream)
       rowStream?.destroy()
       if (client && !committed) {
         try {
@@ -109,6 +128,16 @@ export class MysqlTransferDataGateway implements TransferDataGateway {
       }
       socket?.destroy()
     }
+  }
+}
+
+function validateRequests(requests: TransferDataBatchRequest[]): void {
+  if (requests.length === 0 || new Set(requests.map((batch) => batch.id)).size !== requests.length) {
+    throw new TransferDataError('INVALID_TRANSFER_DATA')
+  }
+  for (const batch of requests) {
+    if (!batch.id) throw new TransferDataError('INVALID_TRANSFER_DATA')
+    validateRequest(batch.request)
   }
 }
 
