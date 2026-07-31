@@ -5,7 +5,10 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 WORKDIR /workspace
 
-RUN corepack enable
+RUN apt-get update \
+  && apt-get install --yes --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/* \
+  && corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.config.ts eslint.config.mjs ./
 COPY apps ./apps
 RUN pnpm install --frozen-lockfile
