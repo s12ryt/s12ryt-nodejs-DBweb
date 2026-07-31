@@ -193,6 +193,8 @@ export type DdlCommand =
       volatility?: 'volatile' | 'stable' | 'immutable'
       security?: 'invoker' | 'definer'
       strict?: boolean
+      deterministic?: boolean
+      dataAccess?: 'no-sql' | 'contains-sql' | 'reads-sql-data' | 'modifies-sql-data'
       confirmed: boolean
     }
   | {

@@ -243,6 +243,9 @@ function renderCreateRoutine(
     .join(', ')
   const body = rawDefinition(command.body)
   if (capabilities.engine === 'postgres') {
+    if (command.deterministic !== undefined || command.dataAccess !== undefined) {
+      throw new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED')
+    }
     const language = command.language?.toLowerCase()
     if (!language || !['sql', 'plpgsql'].includes(language)) {
       throw new DdlValidationError('DDL_INVALID_OPTION')
@@ -269,12 +272,32 @@ function renderCreateRoutine(
   if (command.routineKind === 'function' && !command.returns) {
     throw new DdlValidationError('DDL_INVALID_OPTION')
   }
+  if (command.routineKind === 'function'
+    && command.deterministic !== true
+    && command.dataAccess !== 'no-sql'
+    && command.dataAccess !== 'reads-sql-data') {
+    throw new DdlValidationError('DDL_INVALID_OPTION')
+  }
   if (command.routineKind === 'procedure' && command.returns) {
     throw new DdlValidationError('DDL_INVALID_OPTION')
   }
   const returns = command.returns ? ` RETURNS ${renderType(capabilities, command.returns)}` : ''
   const security = command.security ? ` SQL SECURITY ${command.security.toUpperCase()}` : ''
-  return `CREATE ${routine} ${qualified(command.schema, command.name)}(${argumentsSql})${returns}${security} ${body}`
+  const deterministic = command.deterministic === undefined
+    ? ''
+    : command.deterministic ? ' DETERMINISTIC' : ' NOT DETERMINISTIC'
+  const dataAccess = command.dataAccess ? ` ${mysqlDataAccess(command.dataAccess)}` : ''
+  return `CREATE ${routine} ${qualified(command.schema, command.name)}(${argumentsSql})${returns}${deterministic}${dataAccess}${security} ${body}`
+}
+
+function mysqlDataAccess(value: NonNullable<Extract<DdlCommand, { kind: 'create-routine' }>['dataAccess']>): string {
+  const values = {
+    'no-sql': 'NO SQL',
+    'contains-sql': 'CONTAINS SQL',
+    'reads-sql-data': 'READS SQL DATA',
+    'modifies-sql-data': 'MODIFIES SQL DATA',
+  } as const
+  return values[value]
 }
 
 function renderDropRoutine(

@@ -7,6 +7,7 @@ import { buildDdlStatements } from './ddl-sql-builder.js'
 const postgres96 = detectDdlCapabilities('postgres', '9.6.24')
 const postgres11 = detectDdlCapabilities('postgres', '11.22')
 const mysql56 = detectDdlCapabilities('mysql', '5.6.51')
+const mysql84 = detectDdlCapabilities('mysql', '8.4.6')
 
 describe('programmable DDL statements', () => {
   it('建立 PostgreSQL function並以不衝突的dollar quote保存原文body', () => {
@@ -59,6 +60,27 @@ describe('programmable DDL statements', () => {
       kind: 'create-routine', routineKind: 'function', schema: 'app', name: 'order_count',
       arguments: [], body: 'RETURN 1', confirmed: true,
     })).toThrow(new DdlValidationError('DDL_INVALID_OPTION'))
+  })
+
+  it('以結構化特性建立可在 MySQL 8.4 binary logging 下使用的function', () => {
+    expect(() => buildDdlStatements(mysql84, {
+      kind: 'create-routine', routineKind: 'function', schema: 'app', name: 'constant_value',
+      arguments: [], returns: { name: 'int' }, body: 'RETURN 7', confirmed: true,
+    })).toThrow(new DdlValidationError('DDL_INVALID_OPTION'))
+
+    expect(buildDdlStatements(mysql84, {
+      kind: 'create-routine', routineKind: 'function', schema: 'app', name: 'constant_value',
+      arguments: [], returns: { name: 'int' }, body: 'RETURN 7',
+      deterministic: true, dataAccess: 'no-sql', confirmed: true,
+    })).toEqual([
+      'CREATE FUNCTION `app`.`constant_value`() RETURNS int DETERMINISTIC NO SQL RETURN 7',
+    ])
+
+    expect(() => buildDdlStatements(postgres11, {
+      kind: 'create-routine', routineKind: 'function', schema: 'public', name: 'constant_value',
+      arguments: [], returns: { name: 'integer' }, language: 'sql', body: 'SELECT 7',
+      deterministic: true, dataAccess: 'reads-sql-data', confirmed: true,
+    })).toThrow(new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED'))
   })
 
   it('以結構化事件建立 PostgreSQL 與 MySQL trigger', () => {
