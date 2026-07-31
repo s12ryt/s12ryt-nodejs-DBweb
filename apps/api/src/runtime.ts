@@ -15,11 +15,16 @@ import { PostgresConnector } from './connections/postgres-connector.js'
 import { DatabaseExplorer } from './database/database-explorer.js'
 import { MysqlDatabaseGateway } from './database/mysql-database-gateway.js'
 import { PostgresDatabaseGateway } from './database/postgres-database-gateway.js'
+import { DataMutationService } from './data/data-mutation-service.js'
+import { EncryptedMutationAuditRecorder } from './data/mutation-audit.js'
+import { MysqlDataMutationGateway } from './data/mysql-data-mutation-gateway.js'
+import { PostgresDataMutationGateway } from './data/postgres-data-mutation-gateway.js'
 import { RetainedKeepAliveRecorder } from './keepalive/keepalive-event.js'
 import { KeepAliveScheduler, SqlKeepAliveService } from './keepalive/sql-keepalive-service.js'
 import { KyselyAuthRepository } from './metadata/kysely-auth-repository.js'
 import { KyselyConnectionRepository } from './metadata/kysely-connection-repository.js'
 import { KyselyKeepAliveEventRepository } from './metadata/kysely-keepalive-event-repository.js'
+import { KyselyMutationAuditRepository } from './metadata/kysely-mutation-audit-repository.js'
 import { KyselyQueryAuditRepository } from './metadata/kysely-query-audit-repository.js'
 import {
   KyselySshHostKeyResetRecorder,
@@ -171,6 +176,17 @@ export async function buildRuntime(
       postgres: postgresDatabase,
       mysql: mysqlDatabase,
     })
+    const dataMutationService = new DataMutationService(
+      connectionService,
+      {
+        postgres: new PostgresDataMutationGateway(undefined, socketProvider),
+        mysql: new MysqlDataMutationGateway(undefined, socketProvider),
+      },
+      new EncryptedMutationAuditRecorder(
+        new KyselyMutationAuditRepository(database),
+        encryption,
+      ),
+    )
     const audit = new EncryptedQueryAuditRecorder(
       new KyselyQueryAuditRepository(database),
       encryption,
@@ -197,6 +213,7 @@ export async function buildRuntime(
       authService,
       connectionService,
       databaseExplorer,
+      dataMutationService,
       queryService,
       sshKnownHostService: knownHosts,
       csrfSecret,

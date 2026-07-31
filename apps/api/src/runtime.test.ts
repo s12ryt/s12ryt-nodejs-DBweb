@@ -125,6 +125,10 @@ describe('runtime', () => {
 
     expect(createSshTransportFactory).toHaveBeenCalledOnce()
     expect(createSshTransportFactory.mock.calls[0]?.[0]).toBeDefined()
+    expect((await app.inject({
+      method: 'GET',
+      url: '/api/connections/c1/schemas/public/tables/orders/mutations',
+    })).statusCode).toBe(401)
     await expect(app.close()).resolves.toBeUndefined()
   }, 20_000)
 })
