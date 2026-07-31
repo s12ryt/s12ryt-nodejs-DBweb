@@ -9,7 +9,7 @@
 - [x] 建立 TypeScript/pnpm monorepo 與 Vitest/ESLint/TypeScript 測試基線。
 - [x] 完成里程碑一：後端身份、直連、唯讀瀏覽、SQL、保活、稽核、管理 UI、部署檔與跨瀏覽器 E2E。
 - [x] 完成里程碑二：SSH Tunnel 與 TOFU。
-- [ ] 完成里程碑三：M3A 資料 CRUD、M3B 核心 DDL、M3C 進階資料庫物件（M3A 已完成；M3B 本機驗收完成，等待四版本 GitHub 矩陣；M3C 待開始）。
+- [ ] 完成里程碑三：M3A 資料 CRUD、M3B 核心 DDL、M3C 進階資料庫物件（M3A/M3B 已完成；M3C 進行中）。
 - [ ] 完成里程碑四：Web/DB 帳號與權限分配。
 - [ ] 完成里程碑五：CSV/JSON/SQL dump 匯入匯出。
 - [ ] 完成里程碑六：多實例、效能、安全與完整回歸。
@@ -40,4 +40,5 @@
 - 2026-07-31：M3B 完成依伺服器版本動態偵測的核心 DDL capabilities、結構化型別/default/storage 白名單，以及 database/schema/table/column/index/PK/UNIQUE/FK/CHECK 方言 SQL builder；高風險與重負載操作依契約要求二次確認。
 - 2026-07-31：M3B 完成 PG/MySQL DDL gateway、管理員限定 service/HTTP API、90 天 AES-GCM 加密 SQL template 稽核與 runtime 組裝；PG 可交易 DDL 使用交易，database DDL 與 MySQL DDL 依真實能力標記非原子。
 - 2026-07-31：M3B 前端完成管理員結構工作台與 16 項核心 DDL 命令，依 live capabilities 顯示/停用功能；本機最終驗證為 45 個 Vitest 檔通過、2 個整合檔略過，157 tests 通過、4 個真實 DB cases 略過，lint、typecheck、build 與三瀏覽器核心 E2E 全綠。
-- 2026-07-31：M3B PostgreSQL 9.6/17、MySQL 5.6/8.4 真實 DDL integration 已加入 GitHub Actions；本機因未設定資料庫服務而明確略過，待推送後以遠端矩陣驗收。
+- 2026-07-31：M3B 首次遠端矩陣 run `30599472205` 在 MySQL 5.6/8.4 精準捕捉 `AUTO_INCREMENT` 欄位未同時建立索引或主鍵的合法性缺陷；先以 builder 測試建立 RED，再要求 MySQL identity 欄位必須納入 create-table primary key。
+- 2026-07-31：M3B GitHub Actions run `30599742558` 全綠；PostgreSQL 9.6/17、MySQL 5.6/8.4 真實 mutation 與 DDL、quality、Docker image 及三瀏覽器均通過。M3B 完成並直接進入 M3C。

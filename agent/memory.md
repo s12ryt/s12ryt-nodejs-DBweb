@@ -32,5 +32,7 @@
 - 依 RED -> GREEN 完成 M3B 核心 DDL：版本化 capability、結構化 database/schema/table/column/index/PK/UNIQUE/FK/CHECK commands、型別/default/storage/fragment 白名單及高風險確認。
 - 完成 PostgreSQL/MySQL DDL gateways、管理員限定 service 與 HTTP API、runtime wiring，以及 90 天 AES-GCM 加密 SQL template 稽核；錯誤訊息不洩漏 driver 細節。
 - 完成雙語管理員結構工作台，涵蓋 16 項核心 DDL 操作並依 live capabilities 限制版本功能；前端 App tests 12/12 通過。
-- 新增 PostgreSQL 9.6/17 與 MySQL 5.6/8.4 真實 DDL integration，涵蓋建表、欄位、索引、約束、版本化 rename/CHECK 與 PostgreSQL rollback；GitHub workflow 已納入，待遠端執行。
+- 新增 PostgreSQL 9.6/17 與 MySQL 5.6/8.4 真實 DDL integration，涵蓋建表、欄位、索引、約束、版本化 rename/CHECK 與 PostgreSQL rollback；GitHub workflow 已納入。
 - M3B 推送前本機驗證：Vitest 45 files通過、2 files略過，157 tests通過、4個無本機DB環境的integration cases略過；ESLint、workspace strict typecheck、production build及Chromium/Firefox/WebKit核心E2E全綠。
+- M3B 首次 GitHub Actions run `30599472205` 在 MySQL 5.6/8.4 真實建立資料表時失敗；原因是 builder 允許 `AUTO_INCREMENT` 欄位未包含於索引。新增 RED 測試後，create-table 支援結構化 primary key，且 MySQL identity 欄位未納入主鍵時拒絕命令。
+- 修復後 GitHub Actions run `30599742558` 全綠：PostgreSQL 9.6/17、MySQL 5.6/8.4 真實 mutation/DDL、quality、Docker image、Chromium/Firefox/WebKit均通過；M3B驗收完成並進入M3C。
