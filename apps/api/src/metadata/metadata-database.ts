@@ -12,6 +12,8 @@ import type { DdlCommand } from '../ddl/ddl-command.js'
 import type { DdlAuditEntry } from '../ddl/ddl-service.js'
 import type { SecurityAuditAction } from '../security/security-audit.js'
 import type { StoredNativeAccount } from '../accounts/native-account-service.js'
+import type { StoredTransferJob } from '../transfers/transfer-job.js'
+import type { StoredTransferAudit } from '../transfers/transfer-audit.js'
 
 interface UsersTable {
   id: string
@@ -175,6 +177,47 @@ interface ManagedNativeAccountsTable {
   updated_at: string
 }
 
+interface TransferJobLockTable {
+  id: number
+  revision: number
+}
+
+interface TransferJobsTable {
+  id: string
+  owner_id: string
+  connection_id: string
+  direction: StoredTransferJob['direction']
+  format: StoredTransferJob['format']
+  include_data: number
+  status: StoredTransferJob['status']
+  received_bytes: number
+  processed_bytes: number
+  processed_rows: number
+  processed_tables: number
+  error_count: number
+  source_bytes: number | null
+  source_checksum: string | null
+  upload_completed_at: string | null
+  created_at: string
+  updated_at: string
+  expires_at: string
+}
+
+interface TransferAuditsTable {
+  id: string
+  actor_id: string
+  job_id: string
+  connection_id: string
+  direction: StoredTransferAudit['direction']
+  format: StoredTransferAudit['format']
+  action: StoredTransferAudit['action']
+  status: StoredTransferAudit['status']
+  encrypted_details: string
+  error_code: string | null
+  created_at: string
+  expires_at: string
+}
+
 export interface MetadataDatabase {
   auth_lifecycle_lock: AuthLifecycleLockTable
   users: UsersTable
@@ -188,6 +231,9 @@ export interface MetadataDatabase {
   security_audits: SecurityAuditsTable
   ssh_host_key_resets: SshHostKeyResetsTable
   ssh_known_hosts: SshKnownHostsTable
+  transfer_job_lock: TransferJobLockTable
+  transfer_jobs: TransferJobsTable
+  transfer_audits: TransferAuditsTable
   web_access_assignments: WebAccessAssignmentsTable
 }
 
@@ -368,6 +414,83 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .execute()
 
   await database.schema
+    .createTable('transfer_job_lock')
+    .ifNotExists()
+    .addColumn('id', 'integer', (column) => column.primaryKey())
+    .addColumn('revision', 'integer', (column) => column.notNull())
+    .execute()
+  await database
+    .insertInto('transfer_job_lock')
+    .values({ id: 1, revision: 0 })
+    .onConflict((conflict) => conflict.column('id').doNothing())
+    .execute()
+
+  await database.schema
+    .createTable('transfer_jobs')
+    .ifNotExists()
+    .addColumn('id', 'varchar(36)', (column) => column.primaryKey())
+    .addColumn('owner_id', 'varchar(36)', (column) => column.notNull())
+    .addColumn('connection_id', 'varchar(36)', (column) => column.notNull())
+    .addColumn('direction', 'varchar(16)', (column) => column.notNull())
+    .addColumn('format', 'varchar(16)', (column) => column.notNull())
+    .addColumn('include_data', 'integer', (column) => column.notNull().defaultTo(1))
+    .addColumn('status', 'varchar(16)', (column) => column.notNull())
+    .addColumn('received_bytes', 'integer', (column) => column.notNull())
+    .addColumn('processed_bytes', 'integer', (column) => column.notNull())
+    .addColumn('processed_rows', 'integer', (column) => column.notNull())
+    .addColumn('processed_tables', 'integer', (column) => column.notNull())
+    .addColumn('error_count', 'integer', (column) => column.notNull())
+    .addColumn('source_bytes', 'integer')
+    .addColumn('source_checksum', 'varchar(64)')
+    .addColumn('upload_completed_at', 'varchar(35)')
+    .addColumn('created_at', 'varchar(35)', (column) => column.notNull())
+    .addColumn('updated_at', 'varchar(35)', (column) => column.notNull())
+    .addColumn('expires_at', 'varchar(35)', (column) => column.notNull())
+    .execute()
+
+  const transferJobsTable = (await database.introspection.getTables())
+    .find((table) => table.name === 'transfer_jobs')
+  const transferJobColumns = new Set(transferJobsTable?.columns.map((column) => column.name))
+  if (!transferJobColumns.has('include_data')) {
+    await database.schema
+      .alterTable('transfer_jobs')
+      .addColumn('include_data', 'integer', (column) => column.notNull().defaultTo(1))
+      .execute()
+  }
+  if (!transferJobColumns.has('source_bytes')) {
+    await database.schema.alterTable('transfer_jobs').addColumn('source_bytes', 'integer').execute()
+  }
+  if (!transferJobColumns.has('source_checksum')) {
+    await database.schema
+      .alterTable('transfer_jobs')
+      .addColumn('source_checksum', 'varchar(64)')
+      .execute()
+  }
+  if (!transferJobColumns.has('upload_completed_at')) {
+    await database.schema
+      .alterTable('transfer_jobs')
+      .addColumn('upload_completed_at', 'varchar(35)')
+      .execute()
+  }
+
+  await database.schema
+    .createTable('transfer_audits')
+    .ifNotExists()
+    .addColumn('id', 'varchar(36)', (column) => column.primaryKey())
+    .addColumn('actor_id', 'varchar(36)', (column) => column.notNull())
+    .addColumn('job_id', 'varchar(36)', (column) => column.notNull())
+    .addColumn('connection_id', 'varchar(36)', (column) => column.notNull())
+    .addColumn('direction', 'varchar(16)', (column) => column.notNull())
+    .addColumn('format', 'varchar(16)', (column) => column.notNull())
+    .addColumn('action', 'varchar(32)', (column) => column.notNull())
+    .addColumn('status', 'varchar(16)', (column) => column.notNull())
+    .addColumn('encrypted_details', 'text', (column) => column.notNull())
+    .addColumn('error_code', 'varchar(64)')
+    .addColumn('created_at', 'varchar(35)', (column) => column.notNull())
+    .addColumn('expires_at', 'varchar(35)', (column) => column.notNull())
+    .execute()
+
+  await database.schema
     .createTable('query_audits')
     .ifNotExists()
     .addColumn('id', 'varchar(36)', (column) => column.primaryKey())
@@ -494,6 +617,34 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .createIndex('security_audits_expires_at_index')
     .ifNotExists()
     .on('security_audits')
+    .column('expires_at')
+    .execute()
+
+  await database.schema
+    .createIndex('transfer_jobs_owner_status_index')
+    .ifNotExists()
+    .on('transfer_jobs')
+    .columns(['owner_id', 'status'])
+    .execute()
+
+  await database.schema
+    .createIndex('transfer_jobs_connection_status_index')
+    .ifNotExists()
+    .on('transfer_jobs')
+    .columns(['connection_id', 'status'])
+    .execute()
+
+  await database.schema
+    .createIndex('transfer_jobs_expires_at_index')
+    .ifNotExists()
+    .on('transfer_jobs')
+    .column('expires_at')
+    .execute()
+
+  await database.schema
+    .createIndex('transfer_audits_expires_at_index')
+    .ifNotExists()
+    .on('transfer_audits')
     .column('expires_at')
     .execute()
 }
