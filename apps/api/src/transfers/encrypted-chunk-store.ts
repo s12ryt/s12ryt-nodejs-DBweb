@@ -34,6 +34,18 @@ export interface TransferChunkMetadata {
   checksum: string
 }
 
+export interface TransferChunkStore {
+  put(
+    jobId: string,
+    index: number,
+    plaintext: Uint8Array,
+    expectedChecksum: string,
+  ): Promise<TransferChunkMetadata>
+  read(jobId: string, index: number): Promise<Buffer>
+  list(jobId: string): Promise<TransferChunkMetadata[]>
+  deleteJob(jobId: string): Promise<void>
+}
+
 interface EncryptedChunkStoreOptions {
   root: string
   encryption: EnvelopeEncryption
@@ -42,7 +54,7 @@ interface EncryptedChunkStoreOptions {
   maxBytes?: number
 }
 
-export class EncryptedChunkStore {
+export class EncryptedChunkStore implements TransferChunkStore {
   private readonly root: string
   private readonly encryption: EnvelopeEncryption
   private readonly purposeNamespace: string | undefined

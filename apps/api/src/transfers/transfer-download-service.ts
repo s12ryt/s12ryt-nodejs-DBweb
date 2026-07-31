@@ -1,5 +1,5 @@
 import type { AuthUser } from '../auth/auth-types.js'
-import type { EncryptedChunkStore } from './encrypted-chunk-store.js'
+import type { TransferChunkStore } from './encrypted-chunk-store.js'
 import type { TransferAuditRecorder } from './transfer-audit.js'
 import type { StoredTransferJob, TransferJobService } from './transfer-job.js'
 
@@ -29,7 +29,7 @@ export interface TransferDownload {
 export class TransferDownloadService {
   constructor(
     private readonly jobs: TransferJobService,
-    private readonly output: EncryptedChunkStore,
+    private readonly output: TransferChunkStore,
     private readonly authorize: TransferDownloadAuthorizer,
     private readonly audit?: TransferAuditRecorder,
   ) {}

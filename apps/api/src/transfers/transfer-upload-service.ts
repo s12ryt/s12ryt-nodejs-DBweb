@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import type { AuthUser } from '../auth/auth-types.js'
-import type { EncryptedChunkStore, TransferChunkMetadata } from './encrypted-chunk-store.js'
+import type { TransferChunkMetadata, TransferChunkStore } from './encrypted-chunk-store.js'
 import type { TransferAuditRecorder } from './transfer-audit.js'
 import type { StoredTransferJob, TransferJobService } from './transfer-job.js'
 import { TransferJobError } from './transfer-job.js'
@@ -30,7 +30,7 @@ export type TransferUploadAuthorizer = (
 export class TransferUploadService {
   constructor(
     private readonly jobs: TransferJobService,
-    private readonly chunks: EncryptedChunkStore,
+    private readonly chunks: TransferChunkStore,
     private readonly chunkSizeBytes = 8 * 1024 * 1024,
     private readonly now: () => Date = () => new Date(),
     private readonly authorize: TransferUploadAuthorizer = async () => true,
