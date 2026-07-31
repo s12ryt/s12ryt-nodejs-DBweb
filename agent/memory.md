@@ -58,3 +58,7 @@
 - 完成原生帳號 HTTP/runtime 組裝與雙語前端工作台；受保護帳號無危險控制，管理員密碼只顯示於暫時 React state。App tests 20/20、M4B targeted 後端 46/46、API/Web strict typecheck與lint通過，並新增四版本真實帳號建立、輪替、停啟、驗證與刪除 integration。
 - M4B 遠端驗收依序由 runs `30611168882`、`30611584311`、`30611986740`、`30612370976`、`30612718012`、`30613303198`、`30613945287`、`30614208048`、`30614456468`、`30615220500` 與 `30616092914` 收斂 MySQL 測試前置、5.6 帳號名稱上限、資源限制語法及委派權限問題；暫時診斷均已移除。
 - MySQL 5.6 建立帳號採 `CREATE USER` 後 `GRANT USAGE ... WITH MAX_USER_CONNECTIONS`；CI 只對受保護 DBWeb 管理連線授予 `CREATE USER ... WITH GRANT OPTION`，受管帳號仍無管理權限。最終 GitHub Actions run `30616451344` 的 quality、Docker、三瀏覽器、PostgreSQL 9.6/17 與 MySQL 5.6/8.4 全數通過，M4B 驗收完成。
+- 依 RED -> GREEN 完成 M4C native grant planner與service：依PG/MySQL、database/schema/table層級限制白名單，拒絕system database、EXECUTE、GRANT OPTION、跨database batch及未確認REVOKE；每請求即時檢查`account-manage`並重新確認actual account與保護狀態。
+- PostgreSQL grant gateway由目標database暫時連線讀取pg_catalog direct ACL，整批交易失敗rollback；MySQL由`mysql.db`/`mysql.tables_priv`結構化讀actual grants，逐句執行且失敗回安全appliedCount/failedIndex、不補償已完成步驟。安全audit保存加密SQL templates且不記密碼或driver錯誤。
+- 完成雙語原生權限工作台：手動目標database、實際權限讀取、方言與scope白名單、GRANT及REVOKE確認；App tests 21/21，Chromium/Firefox/WebKit授權流程全綠。
+- M4C本機完整驗證：Vitest 62 files通過、3 integration files略過，264 tests通過、10個無本機DB cases略過；ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases按設定略過。四版本真實grant integration已加入既有native account矩陣，等待GitHub Actions。
