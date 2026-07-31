@@ -28,6 +28,7 @@ function inspection(jobId: string): TransferPreviewInspection {
     estimatedRows: 3,
     estimatedTables: 1,
     issues: [{ line: 2, column: 'amount', code: 'INVALID_VALUE', summary: 'invalid decimal' }],
+    plan: { kind: 'csv-import', table: 'orders' },
   }
 }
 
@@ -45,11 +46,12 @@ describe('TransferPreviewService', () => {
     }))
     const inspect = vi.fn(async () => inspection(job.id))
     const record = vi.fn(async () => undefined)
+    const save = vi.fn(async () => undefined)
     const tokens = new TransferPreviewTokenService(
       Buffer.alloc(32, 19),
       () => new Date('2026-07-31T00:00:00.000Z'),
     )
-    const service = new TransferPreviewService(jobs, { inspect }, tokens, { record })
+    const service = new TransferPreviewService(jobs, { inspect }, tokens, { save }, { record })
 
     const result = await service.preview(actor, job.id, {
       mapping: { amount: 'total' },
@@ -72,6 +74,11 @@ describe('TransferPreviewService', () => {
     expect(tokens.verify(result.token, inspection(job.id).fingerprint)).toMatchObject({
       jobId: job.id,
     })
+    expect(save).toHaveBeenCalledWith(
+      job.id,
+      inspection(job.id).fingerprint,
+      { kind: 'csv-import', table: 'orders' },
+    )
     expect(await jobs.get(actor, job.id)).toMatchObject({ status: 'previewed' })
     expect(record).toHaveBeenCalledWith(expect.objectContaining({
       actorId: actor.id,
@@ -89,7 +96,7 @@ describe('TransferPreviewService', () => {
     const tokens = new TransferPreviewTokenService(Buffer.alloc(32, 20))
     const incomplete = new TransferPreviewService(jobs, {
       inspect: async () => inspection(job.id),
-    }, tokens)
+    }, tokens, { save: async () => undefined })
     await expect(incomplete.preview(actor, job.id, {
       mapping: {}, strategy: {}, target: {},
     })).rejects.toEqual(new TransferPreviewError('UPLOAD_INCOMPLETE'))
@@ -102,7 +109,7 @@ describe('TransferPreviewService', () => {
     }))
     const wrongJob = new TransferPreviewService(jobs, {
       inspect: async () => inspection('00000000-0000-4000-8000-000000000099'),
-    }, tokens)
+    }, tokens, { save: async () => undefined })
     await expect(wrongJob.preview(actor, job.id, {
       mapping: {}, strategy: {}, target: {},
     })).rejects.toEqual(new TransferPreviewError('INVALID_PREVIEW'))
@@ -112,7 +119,7 @@ describe('TransferPreviewService', () => {
         ...inspection(job.id),
         issues: Array.from({ length: 101 }, () => ({ code: 'ERROR', summary: 'masked' })),
       }),
-    }, tokens)
+    }, tokens, { save: async () => undefined })
     await expect(tooMany.preview(actor, job.id, {
       mapping: {}, strategy: {}, target: {},
     })).rejects.toEqual(new TransferPreviewError('INVALID_PREVIEW'))

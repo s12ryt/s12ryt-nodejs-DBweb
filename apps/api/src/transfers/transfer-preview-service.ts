@@ -3,6 +3,7 @@ import type { TransferAuditRecorder } from './transfer-audit.js'
 import type { StoredTransferJob, TransferJobService } from './transfer-job.js'
 import { transitionTransferJob } from './transfer-job.js'
 import type { TransferPreviewFingerprint, TransferPreviewTokenService } from './transfer-preview-token.js'
+import type { TransferPreviewPlanWriter } from './transfer-preview-plan.js'
 
 export interface TransferPreviewRequest {
   mapping: Readonly<Record<string, unknown>>
@@ -23,6 +24,7 @@ export interface TransferPreviewInspection {
   estimatedRows: number
   estimatedTables: number
   issues: TransferPreviewIssue[]
+  plan: unknown
 }
 
 export interface TransferPreviewInspector {
@@ -38,7 +40,7 @@ export class TransferPreviewError extends Error {
   }
 }
 
-export interface TransferPreviewResult extends Omit<TransferPreviewInspection, 'fingerprint'> {
+export interface TransferPreviewResult extends Omit<TransferPreviewInspection, 'fingerprint' | 'plan'> {
   token: string
 }
 
@@ -47,6 +49,7 @@ export class TransferPreviewService {
     private readonly jobs: TransferJobService,
     private readonly inspector: TransferPreviewInspector,
     private readonly tokens: TransferPreviewTokenService,
+    private readonly plans: TransferPreviewPlanWriter,
     private readonly audit?: TransferAuditRecorder,
   ) {}
 
@@ -64,6 +67,7 @@ export class TransferPreviewService {
     const inspection = await this.inspector.inspect(job, request)
     this.validateInspection(job, inspection)
     const token = this.tokens.issue(inspection.fingerprint)
+    await this.plans.save(jobId, inspection.fingerprint, inspection.plan)
     const previewed = await this.jobs.update(actor, jobId, (current) =>
       transitionTransferJob(current, 'previewed', { updatedAt: current.updatedAt }))
     await this.audit?.record({
