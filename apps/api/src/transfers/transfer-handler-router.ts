@@ -22,6 +22,8 @@ export interface TransferHandlers {
   friendlyCsvExport: TransferHandler
   exactJsonExport: TransferHandler
   exactJsonImport: TransferHandler
+  sqlDumpExport?: TransferHandler
+  sqlRestore?: TransferHandler
 }
 
 export class TransferHandlerRouterError extends Error {
@@ -65,6 +67,8 @@ export class TransferHandlerRouter implements TransferHandler {
     if (job.direction === 'export' && job.format === 'csv') return this.handlers.friendlyCsvExport
     if (job.direction === 'export' && job.format === 'json') return this.handlers.exactJsonExport
     if (job.direction === 'import' && job.format === 'json') return this.handlers.exactJsonImport
+    if (job.direction === 'export' && job.format === 'sql') return this.handlers.sqlDumpExport
+    if (job.direction === 'import' && job.format === 'sql') return this.handlers.sqlRestore
     return undefined
   }
 }

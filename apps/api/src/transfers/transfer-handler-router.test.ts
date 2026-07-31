@@ -18,9 +18,14 @@ describe('TransferHandlerRouter', () => {
     const friendly = handler('friendly')
     const jsonExport = handler('json-export')
     const jsonImport = handler('json-import')
+    const sqlExport = handler('sql-export')
+    const sqlImport = handler('sql-import')
     const router = new TransferHandlerRouter(
       { get: vi.fn(async () => current), cancel: vi.fn(async () => current) },
-      { friendlyCsvExport: friendly, exactJsonExport: jsonExport, exactJsonImport: jsonImport },
+      {
+        friendlyCsvExport: friendly, exactJsonExport: jsonExport, exactJsonImport: jsonImport,
+        sqlDumpExport: sqlExport, sqlRestore: sqlImport,
+      },
     )
 
     await expect(router.inspect(actor, current, { mapping: {}, strategy: {}, target: {} })).resolves.toBe('friendly:inspect')
@@ -28,9 +33,15 @@ describe('TransferHandlerRouter', () => {
     await expect(router.execute(actor, current.id, 'token')).resolves.toBe('json-export:execute')
     current = { ...current, direction: 'import' }
     await expect(router.cancel(actor, current.id)).resolves.toBe('json-import:cancel')
+    current = { ...current, format: 'sql', direction: 'export' }
+    await expect(router.inspect(actor, current, { mapping: {}, strategy: {}, target: {} })).resolves.toBe('sql-export:inspect')
+    current = { ...current, direction: 'import' }
+    await expect(router.execute(actor, current.id, 'token')).resolves.toBe('sql-import:execute')
     expect(friendly.inspect).toHaveBeenCalledOnce()
     expect(jsonExport.execute).toHaveBeenCalledOnce()
     expect(jsonImport.cancel).toHaveBeenCalledOnce()
+    expect(sqlExport.inspect).toHaveBeenCalledOnce()
+    expect(sqlImport.execute).toHaveBeenCalledOnce()
   })
 
   it('rejects unsupported combinations without falling back to another handler', async () => {
