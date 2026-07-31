@@ -90,4 +90,46 @@ describe('detectDdlCapabilities', () => {
       constraint: { check: false },
     })
   })
+
+  it('依 PostgreSQL 版本區分進階物件能力', () => {
+    expect(detectDdlCapabilities('postgres', 'PostgreSQL 9.6.24')).toMatchObject({
+      advanced: {
+        view: true,
+        materializedView: true,
+        sequence: true,
+        enum: true,
+        domain: true,
+        function: true,
+        procedure: false,
+        trigger: true,
+        partition: false,
+        extension: true,
+        event: false,
+      },
+    })
+    expect(detectDdlCapabilities('postgres', 'PostgreSQL 10.23')).toMatchObject({
+      advanced: { partition: true, procedure: false },
+    })
+    expect(detectDdlCapabilities('postgres', 'PostgreSQL 11.22')).toMatchObject({
+      advanced: { partition: true, procedure: true },
+    })
+  })
+
+  it('只向 MySQL 開放其支援的進階物件', () => {
+    expect(detectDdlCapabilities('mysql', '5.6.51')).toMatchObject({
+      advanced: {
+        view: true,
+        materializedView: false,
+        sequence: false,
+        enum: false,
+        domain: false,
+        function: true,
+        procedure: true,
+        trigger: true,
+        partition: true,
+        extension: false,
+        event: true,
+      },
+    })
+  })
 })

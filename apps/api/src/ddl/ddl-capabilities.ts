@@ -50,6 +50,19 @@ export interface DdlCapabilities {
     partial: boolean
     prefixLength: boolean
   }
+  advanced: {
+    view: boolean
+    materializedView: boolean
+    sequence: boolean
+    enum: boolean
+    domain: boolean
+    function: boolean
+    procedure: boolean
+    trigger: boolean
+    partition: boolean
+    extension: boolean
+    event: boolean
+  }
 }
 
 const POSTGRES_TYPES = [
@@ -92,6 +105,19 @@ export function detectDdlCapabilities(
         partial: true,
         prefixLength: false,
       },
+      advanced: {
+        view: true,
+        materializedView: true,
+        sequence: true,
+        enum: true,
+        domain: true,
+        function: true,
+        procedure: atLeast(version, 11, 0),
+        trigger: true,
+        partition: atLeast(version, 10, 0),
+        extension: true,
+        event: false,
+      },
     }
   }
 
@@ -122,6 +148,19 @@ export function detectDdlCapabilities(
       expression: false,
       partial: false,
       prefixLength: true,
+    },
+    advanced: {
+      view: true,
+      materializedView: false,
+      sequence: false,
+      enum: false,
+      domain: false,
+      function: true,
+      procedure: true,
+      trigger: true,
+      partition: true,
+      extension: false,
+      event: true,
     },
   }
 }
