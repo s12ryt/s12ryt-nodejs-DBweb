@@ -13,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   Server,
+  ShieldCheck,
   Square,
   Table2,
   Trash2,
@@ -33,6 +34,8 @@ import {
   type DatabaseValueType,
   type DdlCapabilities,
   type Locale,
+  type NativeAccount,
+  type NativeAccountResult,
   type QueryResult,
   type RowPage,
   type Session,
@@ -236,7 +239,7 @@ function EmptyWorkspace({ title, text }: { title: string; text: string }) {
 
 function ConnectionWorkspace({ connection, locale, csrfToken, isAdmin }: { connection: ConnectionProfile; locale: Locale; csrfToken: string; isAdmin: boolean }) {
   const t = translations(locale)
-  const [tab, setTab] = useState<'browse' | 'query' | 'structure'>('browse')
+  const [tab, setTab] = useState<'browse' | 'query' | 'structure' | 'accounts'>('browse')
   const [confirmingReset, setConfirmingReset] = useState(false)
   const [error, setError] = useState('')
   const ssh = connection.ssh?.enabled ? connection.ssh : undefined
@@ -262,13 +265,161 @@ function ConnectionWorkspace({ connection, locale, csrfToken, isAdmin }: { conne
         <button role="tab" aria-selected={tab === 'browse'} onClick={() => setTab('browse')}><Table2 size={17} />{t('rows')}</button>
         <button role="tab" aria-selected={tab === 'query'} onClick={() => setTab('query')}><Braces size={17} />{t('query')}</button>
         {isAdmin && <button role="tab" aria-selected={tab === 'structure'} onClick={() => setTab('structure')}><Wrench size={17} />{t('structure')}</button>}
+        <button role="tab" aria-selected={tab === 'accounts'} onClick={() => setTab('accounts')}><ShieldCheck size={17} />{t('nativeAccounts')}</button>
       </div>
       {tab === 'browse' && <DataBrowser connectionId={connection.id} locale={locale} csrfToken={csrfToken} isAdmin={isAdmin} />}
       {tab === 'query' && <QueryEditor connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
       {tab === 'structure' && isAdmin && <DdlWorkbench connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
+      {tab === 'accounts' && <NativeAccountWorkbench connection={connection} locale={locale} csrfToken={csrfToken} isAdmin={isAdmin} />}
       {confirmingReset && <ConfirmDialog title={t('sshReset')} body={t('sshResetBody')} confirm={t('sshResetConfirm')} cancel={t('cancel')} onCancel={() => setConfirmingReset(false)} onConfirm={() => void resetSshHostKey()} />}
     </div>
   )
+}
+
+type NativeConfirmation =
+  | { kind: 'create'; body: Record<string, unknown> }
+  | { kind: 'adopt'; account: NativeAccount }
+  | { kind: 'disable' | 'delete' | 'restore'; account: NativeAccount }
+
+function NativeAccountWorkbench({ connection, locale, csrfToken, isAdmin }: { connection: ConnectionProfile; locale: Locale; csrfToken: string; isAdmin: boolean }) {
+  const t = translations(locale)
+  const base = `/api/connections/${encodeURIComponent(connection.id)}/accounts`
+  const [accounts, setAccounts] = useState<NativeAccount[]>([])
+  const [error, setError] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [confirming, setConfirming] = useState<NativeConfirmation>()
+  const [revealing, setRevealing] = useState<NativeAccount>()
+  const [shownPassword, setShownPassword] = useState('')
+
+  const load = useCallback(async () => {
+    try {
+      setAccounts(await apiRequest<NativeAccount[]>(base, { locale }))
+      setError('')
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }, [base, locale])
+
+  useEffect(() => { void load() }, [load])
+
+  async function postResult(path: string, body: Record<string, unknown>) {
+    const result = await apiRequest<NativeAccountResult>(path, { method: 'POST', locale, csrfToken, body })
+    setShownPassword(result.password ?? '')
+    await load()
+  }
+
+  async function runConfirmation() {
+    const pending = confirming
+    if (!pending) return
+    setConfirming(undefined); setShownPassword(''); setError('')
+    try {
+      if (pending.kind === 'create') {
+        await postResult(base, { ...pending.body, confirmed: true }); setCreating(false); return
+      }
+      const identity = pending.account.identity
+      if (pending.kind === 'adopt') {
+        await postResult(`${base}/adopt`, { identity: identity.engine === 'mysql' ? { username: identity.username, host: identity.host } : { username: identity.username }, confirmed: true }); return
+      }
+      const id = encodeURIComponent(pending.account.managedAccountId ?? '')
+      if (pending.kind === 'disable') {
+        await apiRequest<void>(`${base}/${id}`, { method: 'PATCH', locale, csrfToken, body: { enabled: false, confirmed: true } })
+      } else if (pending.kind === 'delete') {
+        await apiRequest<void>(`${base}/${id}`, { method: 'DELETE', locale, csrfToken, body: { confirmed: true } })
+      } else {
+        await apiRequest<void>(`${base}/${id}/restore`, { method: 'POST', locale, csrfToken, body: { confirmed: true } })
+      }
+      await load()
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
+  async function simpleAction(account: NativeAccount, action: 'verify' | 'rotate' | 'enable') {
+    const id = encodeURIComponent(account.managedAccountId ?? '')
+    setShownPassword(''); setError('')
+    try {
+      if (action === 'verify') await apiRequest<void>(`${base}/${id}/verify`, { method: 'POST', locale, csrfToken, body: {} })
+      if (action === 'rotate') await postResult(`${base}/${id}/rotate-password`, {})
+      if (action === 'enable') await apiRequest<void>(`${base}/${id}`, { method: 'PATCH', locale, csrfToken, body: { enabled: true, confirmed: true } })
+      await load()
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
+  async function reveal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!revealing?.managedAccountId) return
+    const data = new FormData(event.currentTarget)
+    try {
+      const result = await apiRequest<{ password: string }>(`${base}/${encodeURIComponent(revealing.managedAccountId)}/reveal-password`, {
+        method: 'POST', locale, csrfToken, body: { webPassword: String(data.get('webPassword') ?? '') },
+      })
+      setShownPassword(result.password); setRevealing(undefined)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
+  const confirmCopy = confirming ? nativeConfirmationCopy(confirming.kind, t) : undefined
+  return (
+    <section className="native-accounts">
+      <div className="native-account-toolbar">
+        <div><span className="section-label">{t('nativeAccounts')}</span><strong>{accounts.length}</strong></div>
+        <button className="primary-button" type="button" onClick={() => { setCreating(true); setShownPassword('') }}><Plus size={16} />{t('createNativeAccount')}</button>
+      </div>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      {shownPassword && <div className="password-once"><span>{t('passwordShownOnce')}</span><code>{shownPassword}</code><button type="button" onClick={() => setShownPassword('')} aria-label="Close"><X size={15} /></button></div>}
+      <div className="native-account-list">
+        {accounts.map((account) => {
+          const identity = account.identity
+          const label = identity.engine === 'mysql' ? `${identity.username}@${identity.host}` : identity.username
+          const deleted = account.managedStatus === 'deleted'
+          return <article className="native-account-row" key={`${identity.engine}:${label}`}>
+            <div className="native-account-identity"><strong>{label}</strong><small>{account.managed ? t('managed') : t('unmanaged')} · {account.canLogin ? t('enabled') : t('disabled')}</small></div>
+            <div className="native-account-state">{account.protected && <span className="status warning">{t('protectedAccount')}</span>}{account.managedStatus && <span className="status">{account.managedStatus}</span>}</div>
+            <div className="native-account-actions">
+              {!account.protected && !account.managed && <button type="button" onClick={() => setConfirming({ kind: 'adopt', account })}>{t('adoptNativeAccount')} {label}</button>}
+              {!account.protected && account.managed && !deleted && account.managedAccountId && <>
+                <IconButton label={`${t('verifyNativeAccount')} ${label}`} onClick={() => void simpleAction(account, 'verify')}><RefreshCw size={15} /></IconButton>
+                <button type="button" onClick={() => void simpleAction(account, 'rotate')}>{t('rotateNativePassword')} {label}</button>
+                {isAdmin && <button type="button" onClick={() => setRevealing(account)}>{t('revealNativePassword')} {label}</button>}
+                {account.managedStatus === 'disabled'
+                  ? <button type="button" onClick={() => void simpleAction(account, 'enable')}>{t('enableNativeAccount')} {label}</button>
+                  : <button type="button" onClick={() => setConfirming({ kind: 'disable', account })}>{t('disableNativeAccount')} {label}</button>}
+                <button className="danger-button" type="button" onClick={() => setConfirming({ kind: 'delete', account })}>{t('deleteNativeAccount')} {label}</button>
+              </>}
+              {!account.protected && account.managed && deleted && <button type="button" onClick={() => setConfirming({ kind: 'restore', account })}>{t('restoreNativeAccount')} {label}</button>}
+            </div>
+          </article>
+        })}
+      </div>
+      {creating && <Modal title={t('createNativeAccount')} onClose={() => setCreating(false)}><form className="form-grid" onSubmit={(event) => {
+        event.preventDefault(); const data = new FormData(event.currentTarget)
+        const username = String(data.get('username') ?? '').trim(); const password = String(data.get('password') ?? '')
+        const host = String(data.get('host') ?? '').trim()
+        setConfirming({ kind: 'create', body: {
+          identity: connection.engine === 'mysql' ? { username, host: host || '%' } : { username },
+          ...(password ? { password } : {}),
+        } })
+      }}>
+        <Field label={t('nativeAccountName')}><input name="username" required /></Field>
+        {connection.engine === 'mysql' && <Field label={t('nativeHost')}><input name="host" defaultValue="%" required /></Field>}
+        <Field label={t('nativeAccountPassword')}><input name="password" type="password" minLength={16} /></Field>
+        <div className="dialog-actions"><button type="button" onClick={() => setCreating(false)}>{t('cancel')}</button><button className="primary-button" type="submit">{t('create')}</button></div>
+      </form></Modal>}
+      {revealing && <Modal title={t('reauthenticate')} onClose={() => setRevealing(undefined)}><form className="form-grid" onSubmit={(event) => void reveal(event)}><Field label={t('currentPassword')}><input name="webPassword" type="password" required /></Field><div className="dialog-actions"><button type="button" onClick={() => setRevealing(undefined)}>{t('cancel')}</button><button className="primary-button" type="submit">{t('revealNativePassword')}</button></div></form></Modal>}
+      {confirmCopy && <ConfirmDialog title={confirmCopy.title} body={confirmCopy.body} confirm={confirmCopy.confirm} cancel={t('cancel')} onCancel={() => setConfirming(undefined)} onConfirm={() => void runConfirmation()} />}
+    </section>
+  )
+}
+
+function nativeConfirmationCopy(kind: NativeConfirmation['kind'], t: ReturnType<typeof translations>) {
+  if (kind === 'create') return { title: t('confirmCreateAccount'), body: t('confirmCreateAccount'), confirm: t('create') }
+  if (kind === 'adopt') return { title: t('confirmAdoptAccount'), body: t('confirmAdoptAccount'), confirm: t('adoptNativeAccount') }
+  if (kind === 'disable') return { title: t('confirmDisableAccount'), body: t('confirmDisableAccount'), confirm: t('disableNativeAccount') }
+  if (kind === 'delete') return { title: t('confirmDeleteNativeAccount'), body: t('confirmDeleteNativeAccount'), confirm: t('delete') }
+  return { title: t('confirmRestoreAccount'), body: t('confirmRestoreAccount'), confirm: t('restoreNativeAccount') }
 }
 
 const DDL_ACTIONS = [

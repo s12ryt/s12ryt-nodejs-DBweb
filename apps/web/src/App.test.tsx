@@ -622,6 +622,95 @@ describe('DBWeb application shell', () => {
       dataAccess: 'no-sql', confirmed: true,
     } }]))
   })
+
+  it('manages native account verification, disable, deletion, and recovery while protecting system accounts', async () => {
+    const commands: Array<{ method: string; url: string; body?: unknown }> = []
+    let deleted = false
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input); const method = init?.method ?? 'GET'
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url.endsWith('/accounts') && method === 'GET') return Response.json([
+        nativeConnectionAccount,
+        { ...managedNativeAccount, ...(deleted ? { managedStatus: 'deleted', recoverUntil: '2026-08-14T00:00:00.000Z', canLogin: false } : {}) },
+      ])
+      if (method !== 'GET') commands.push({ method, url, ...(init?.body ? { body: JSON.parse(String(init.body)) as unknown } : {}) })
+      if (method === 'DELETE') deleted = true
+      if (url.endsWith('/restore')) deleted = false
+      return new Response(null, { status: 204 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText(connection.name))
+    await user.click(screen.getByRole('tab', { name: '原生帳號' }))
+    expect(await screen.findByText('受保護')).toBeVisible()
+    expect(screen.queryByRole('button', { name: '刪除 dbweb' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '立即驗證 reporter' }))
+    await user.click(screen.getByRole('button', { name: '停用 reporter' }))
+    await user.click(within(screen.getByRole('dialog', { name: '確認停用帳號' })).getByRole('button', { name: '停用' }))
+    await user.click(screen.getByRole('button', { name: '刪除 reporter' }))
+    await user.click(within(screen.getByRole('dialog', { name: '確認刪除原生帳號' })).getByRole('button', { name: '刪除' }))
+    await user.click(await screen.findByRole('button', { name: '復原 reporter' }))
+    await user.click(within(screen.getByRole('dialog', { name: '確認復原帳號' })).getByRole('button', { name: '復原' }))
+
+    await waitFor(() => expect(commands).toEqual(expect.arrayContaining([
+      { method: 'POST', url: '/api/connections/connection-1/accounts/native-1/verify', body: {} },
+      { method: 'PATCH', url: '/api/connections/connection-1/accounts/native-1', body: { enabled: false, confirmed: true } },
+      { method: 'DELETE', url: '/api/connections/connection-1/accounts/native-1', body: { confirmed: true } },
+      { method: 'POST', url: '/api/connections/connection-1/accounts/native-1/restore', body: { confirmed: true } },
+    ])))
+  })
+
+  it('creates, adopts, rotates, and reveals native account credentials through confirmed flows', async () => {
+    const commands: Array<{ method: string; url: string; body?: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input); const method = init?.method ?? 'GET'
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url.endsWith('/accounts') && method === 'GET') return Response.json([externalNativeAccount, managedNativeAccount])
+      if (method !== 'GET') commands.push({ method, url, ...(init?.body ? { body: JSON.parse(String(init.body)) as unknown } : {}) })
+      if (url.endsWith('/accounts') && method === 'POST') return Response.json({ account: {}, password: 'generated-native-password' }, { status: 201 })
+      if (url.endsWith('/adopt')) return Response.json({ account: {}, password: 'adopted-native-password' }, { status: 201 })
+      if (url.endsWith('/rotate-password')) return Response.json({ account: {}, password: 'rotated-native-password' })
+      if (url.endsWith('/reveal-password')) return Response.json({ password: 'revealed-native-password' })
+      return new Response(null, { status: 204 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText(connection.name))
+    await user.click(screen.getByRole('tab', { name: '原生帳號' }))
+    await screen.findByText('external_reader')
+
+    await user.click(screen.getByRole('button', { name: '建立原生帳號' }))
+    await user.type(screen.getByLabelText('原生帳號名稱'), 'app_writer')
+    await user.click(screen.getByRole('button', { name: '建立' }))
+    await user.click(within(screen.getByRole('dialog', { name: '確認建立帳號' })).getByRole('button', { name: '建立' }))
+    expect(await screen.findByText('generated-native-password')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '納管 external_reader' }))
+    await user.click(within(screen.getByRole('dialog', { name: '確認納管帳號' })).getByRole('button', { name: '納管' }))
+    expect(await screen.findByText('adopted-native-password')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '輪替 reporter' }))
+    expect(await screen.findByText('rotated-native-password')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '查看密碼 reporter' }))
+    const reauth = screen.getByRole('dialog', { name: '重新驗證' })
+    await user.type(within(reauth).getByLabelText('目前密碼'), 'admin-password-value')
+    await user.click(within(reauth).getByRole('button', { name: '查看密碼' }))
+    expect(await screen.findByText('revealed-native-password')).toBeVisible()
+
+    expect(commands).toEqual(expect.arrayContaining([
+      { method: 'POST', url: '/api/connections/connection-1/accounts', body: expect.objectContaining({ identity: { username: 'app_writer' }, confirmed: true }) },
+      { method: 'POST', url: '/api/connections/connection-1/accounts/adopt', body: expect.objectContaining({ identity: { username: 'external_reader' }, confirmed: true }) },
+      { method: 'POST', url: '/api/connections/connection-1/accounts/native-1/rotate-password', body: {} },
+      { method: 'POST', url: '/api/connections/connection-1/accounts/native-1/reveal-password', body: { webPassword: 'admin-password-value' } },
+    ]))
+  })
 })
 
 const authenticatedSession = {
@@ -664,6 +753,23 @@ const mysqlConnection = {
   name: 'Primary MySQL',
   engine: 'mysql' as const,
   port: 3306,
+}
+
+const nativeConnectionAccount = {
+  identity: { engine: 'postgres' as const, username: 'dbweb' }, canLogin: true,
+  passwordExpired: false, connectionLimit: -1, systemAccount: false, managed: false,
+  protected: true, protectionReason: 'connection-account' as const,
+}
+
+const managedNativeAccount = {
+  identity: { engine: 'postgres' as const, username: 'reporter' }, canLogin: true,
+  passwordExpired: false, connectionLimit: -1, systemAccount: false, managed: true,
+  managedAccountId: 'native-1', managedStatus: 'active' as const, protected: false,
+}
+
+const externalNativeAccount = {
+  identity: { engine: 'postgres' as const, username: 'external_reader' }, canLogin: true,
+  passwordExpired: false, connectionLimit: -1, systemAccount: false, managed: false, protected: false,
 }
 
 const productMutationInspection = {
