@@ -126,12 +126,18 @@ async function roundTrip(input: RoundTripInput): Promise<void> {
     new TransferOutputWriter(stage), stage, new TransferOutputWriter(output),
   )
   try {
-    const packaged = await new SqlDumpSnapshotCatalog(input.snapshot).withSnapshot(
-      input.connection,
-      input.plan,
-      new AbortController().signal,
-      (catalog) => packageWriter.write(jobId, catalog.manifest, catalog.entries, { compression: 'gzip' }),
-    )
+    let packaged: Awaited<ReturnType<SqlDumpPackageWriter['write']>>
+    try {
+      packaged = await new SqlDumpSnapshotCatalog(input.snapshot).withSnapshot(
+        input.connection,
+        input.plan,
+        new AbortController().signal,
+        (catalog) => packageWriter.write(jobId, catalog.manifest, catalog.entries, { compression: 'gzip' }),
+      )
+    } catch (error) {
+      await diagnoseSnapshot(input, error)
+      throw error
+    }
     await input.reset()
     const restorePlan = buildSqlRestorePlan(packaged.manifest, {
       engine: input.connection.engine,
@@ -173,10 +179,63 @@ async function executeSteps(session: SqlRestoreSession, steps: SqlRestoreStep[])
   const signal = new AbortController().signal
   for (const step of steps) {
     for (const command of step.commands) {
-      for (const sql of buildDdlStatements(session.capabilities, command)) {
+      let statements: string[]
+      try {
+        statements = buildDdlStatements(session.capabilities, command)
+      } catch (error) {
+        throw new Error(JSON.stringify({
+          stage: 'build-ddl',
+          objectId: step.objectId,
+          command: summarizeCommand(command),
+          error: safeError(error),
+        }), { cause: error })
+      }
+      for (const sql of statements) {
         await session.executeStatement(sql, signal)
       }
     }
+  }
+}
+
+async function diagnoseSnapshot(input: RoundTripInput, originalError: unknown): Promise<never> {
+  const session = await input.snapshot.open(input.connection)
+  let stage = 'begin'
+  try {
+    await session.begin(new AbortController().signal)
+    stage = 'inspect'
+    const catalog = await session.inspect(input.plan, new AbortController().signal)
+    stage = 'consume-entry'
+    for (const entry of catalog.entries) {
+      for await (const chunk of entry.content) void chunk
+    }
+    stage = 'commit'
+    await session.commit()
+  } catch (error) {
+    try { await session.rollback() } catch { /* Keep the diagnostic error. */ }
+    throw new Error(JSON.stringify({ stage, error: safeError(error) }), { cause: error })
+  } finally {
+    try { await session.close() } catch { /* Keep the diagnostic error. */ }
+  }
+  throw new Error(JSON.stringify({ stage: 'unknown', error: safeError(originalError) }), { cause: originalError })
+}
+
+function summarizeCommand(command: SqlRestoreStep['commands'][number]): Record<string, unknown> {
+  if (command.kind !== 'create-table') return { kind: command.kind }
+  return {
+    kind: command.kind,
+    columns: command.columns.map((column) => ({ name: column.name, type: column.type.name })),
+  }
+}
+
+function safeError(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) return { name: 'UnknownError' }
+  const driver = error as Error & { code?: unknown; errno?: unknown; sqlState?: unknown }
+  return {
+    name: error.name,
+    message: error.message,
+    code: driver.code,
+    errno: driver.errno,
+    sqlState: driver.sqlState,
   }
 }
 
