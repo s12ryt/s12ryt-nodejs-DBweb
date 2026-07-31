@@ -72,11 +72,36 @@ describe('SQL restore service', () => {
     )
     expect(setup.openSession).not.toHaveBeenCalled()
   })
+
+  it('aborts an active restore and waits for rollback and session cleanup', async () => {
+    const started = deferred<void>()
+    const setup = await createSetup('postgres', { waitForCancellation: started })
+    const execution = setup.service.execute(setup.actor, setup.job.id, 'preview-token')
+    const cancelled = expect(execution).rejects.toEqual(
+      new SqlRestoreExecutionError('RESTORE_CANCELLED', 0, 3),
+    )
+    await started.promise
+
+    await setup.service.cancel(setup.actor, setup.job.id)
+
+    await cancelled
+    expect(setup.calls.slice(-3)).toEqual([
+      'data:table:public.orders:data/public.orders.ndjson:row-data',
+      'rollback',
+      'close',
+    ])
+    expect((await setup.jobs.get(setup.actor, setup.job.id)).status).toBe('cancelled')
+  })
 })
 
 async function createSetup(
   engine: 'postgres' | 'mysql',
-  options: { failData?: boolean; failSqlAt?: number; changedManifest?: boolean } = {},
+  options: {
+    failData?: boolean
+    failSqlAt?: number
+    changedManifest?: boolean
+    waitForCancellation?: Deferred<void>
+  } = {},
 ) {
   const actor = { id: 'admin-1', role: 'admin' as const }
   const now = new Date('2026-07-31T00:00:00.000Z')
@@ -120,11 +145,17 @@ async function createSetup(
       if (options.failSqlAt === applied) throw new Error('driver-secret')
       applied += 1
     }),
-    restoreData: vi.fn(async (objectId, entry, content) => {
+    restoreData: vi.fn(async (object, entry, content, signal) => {
       let body = ''
       for await (const chunk of content) body += Buffer.from(chunk).toString('utf8')
-      calls.push(`data:${objectId}:${entry}:${body}`)
+      calls.push(`data:${object.id}:${entry}:${body}`)
       if (options.failData) throw new Error('driver-secret')
+      if (options.waitForCancellation) {
+        options.waitForCancellation.resolve()
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+      }
       applied += 1
     }),
     commit: vi.fn(async () => { calls.push('commit') }),
@@ -203,6 +234,22 @@ function hash(value: string): string {
 
 function hashCanonical(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex')
+}
+
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve(value: T | PromiseLike<T>): void
+  reject(reason?: unknown): void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: Deferred<T>['resolve']
+  let reject!: Deferred<T>['reject']
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 function canonical(value: unknown): unknown {

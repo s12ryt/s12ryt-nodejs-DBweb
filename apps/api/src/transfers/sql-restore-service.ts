@@ -5,7 +5,7 @@ import type { ConnectionService } from '../connections/connection-service.js'
 import type { DatabaseEngine, ResolvedConnection } from '../connections/connection-types.js'
 import type { DdlCapabilities } from '../ddl/ddl-capabilities.js'
 import { buildDdlStatements } from '../ddl/ddl-sql-builder.js'
-import type { SqlDumpEntry, SqlDumpManifest } from './sql-dump-manifest.js'
+import type { SqlDumpEntry, SqlDumpManifest, SqlDumpObject } from './sql-dump-manifest.js'
 import type { SqlRestorePreviewPlan } from './sql-restore-preview.js'
 import { TransferJobError, transitionTransferJob, type StoredTransferJob, type TransferJobService } from './transfer-job.js'
 
@@ -30,7 +30,7 @@ export interface SqlRestoreSession {
   capabilities: DdlCapabilities
   begin(): Promise<void>
   executeStatement(sql: string, signal: AbortSignal): Promise<void>
-  restoreData(objectId: string, entryPath: string, content: AsyncIterable<Buffer>, signal: AbortSignal): Promise<void>
+  restoreData(object: SqlDumpObject, entryPath: string, content: AsyncIterable<Buffer>, signal: AbortSignal): Promise<void>
   commit(): Promise<void>
   rollback(): Promise<void>
   close(): Promise<void>
@@ -61,6 +61,13 @@ export interface SqlRestoreExecutionResult {
 }
 
 export class SqlRestoreService {
+  private readonly active = new Map<string, {
+    actorId: string
+    controller: AbortController
+    done: Promise<void>
+    finish(): void
+  }>()
+
   constructor(
     private readonly jobs: TransferJobService,
     private readonly connections: Pick<ConnectionService, 'resolveConnection'>,
@@ -75,7 +82,7 @@ export class SqlRestoreService {
     actor: TransferActor,
     jobId: string,
     previewToken: string,
-    signal = new AbortController().signal,
+    externalSignal = new AbortController().signal,
   ): Promise<SqlRestoreExecutionResult> {
     const job = await this.jobs.get(actor, jobId)
     if (!await this.authorize(actor, job)) throw new SqlRestoreExecutionError('FORBIDDEN')
@@ -86,6 +93,17 @@ export class SqlRestoreService {
     const plan = await this.preview.validate(actor, jobId, previewToken)
     const connection = await this.connections.resolveConnection(job.connectionId)
     if (connection.engine !== plan.engine) throw new SqlRestoreExecutionError('RESTORE_CHANGED')
+    if (this.active.has(jobId)) throw new SqlRestoreExecutionError('INVALID_RESTORE_JOB')
+
+    const controller = new AbortController()
+    const signal = AbortSignal.any([externalSignal, controller.signal])
+    const completion = deferred()
+    this.active.set(jobId, {
+      actorId: actor.id,
+      controller,
+      done: completion.promise,
+      finish: completion.resolve,
+    })
 
     let session: SqlRestoreSession | undefined
     let failedStep: number | undefined
@@ -117,20 +135,22 @@ export class SqlRestoreService {
         (index) => { failedStep = index },
       )
 
-      const dataByPath = new Map<string, { objectId: string; index: number }>()
+      const dataByPath = new Map<string, { object: SqlDumpObject; index: number }>()
       for (const step of plan.steps.filter((candidate) => candidate.phase === 'data')) {
         if (!step.dataEntry) throw new SqlRestoreExecutionError('RESTORE_CHANGED')
-        dataByPath.set(step.dataEntry, { objectId: step.objectId, index: sequence })
+        const object = manifest.objects.find((candidate) => candidate.id === step.objectId)
+        if (!object) throw new SqlRestoreExecutionError('RESTORE_CHANGED')
+        dataByPath.set(step.dataEntry, { object, index: sequence })
         sequence += 1
       }
 
       await this.packages.read(jobId, async (_manifest, entry, content) => {
         if (entry.kind !== 'data') return
         const data = dataByPath.get(entry.path)
-        if (!data || entry.objectId !== data.objectId) throw new SqlRestoreExecutionError('RESTORE_CHANGED')
+        if (!data || entry.objectId !== data.object.id) throw new SqlRestoreExecutionError('RESTORE_CHANGED')
         failedStep = data.index
         assertNotCancelled(signal, session!.appliedSteps())
-        await session!.restoreData(data.objectId, entry.path, content, signal)
+        await session!.restoreData(data.object, entry.path, content, signal)
         dataByPath.delete(entry.path)
       })
       if (dataByPath.size > 0) throw new SqlRestoreExecutionError('RESTORE_CHANGED')
@@ -165,7 +185,23 @@ export class SqlRestoreService {
       throw new SqlRestoreExecutionError(cancelled ? 'RESTORE_CANCELLED' : 'RESTORE_FAILED', applied, failedStep)
     } finally {
       try { await session?.close() } catch { /* Cleanup cannot replace the restore result. */ }
+      const active = this.active.get(jobId)
+      if (active?.controller === controller) {
+        this.active.delete(jobId)
+        active.finish()
+      }
     }
+  }
+
+  async cancel(actor: TransferActor, jobId: string): Promise<void> {
+    await this.jobs.get(actor, jobId)
+    const active = this.active.get(jobId)
+    if (!active || (actor.role !== 'admin' && active.actorId !== actor.id)) {
+      await this.jobs.cancel(actor, jobId)
+      return
+    }
+    active.controller.abort(new SqlRestoreExecutionError('RESTORE_CANCELLED'))
+    await active.done
   }
 
   private async markStopped(
@@ -184,6 +220,12 @@ export class SqlRestoreService {
       if (!(error instanceof TransferJobError)) throw error
     }
   }
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((resolvePromise) => { resolve = resolvePromise })
+  return { promise, resolve }
 }
 
 function validatePlanAgainstManifest(plan: SqlRestorePreviewPlan, manifest: SqlDumpManifest): void {
