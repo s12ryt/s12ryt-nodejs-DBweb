@@ -1,0 +1,23 @@
+services:
+  dbweb:
+    build:
+      context: .
+    environment:
+      DBWEB_MASTER_KEY: ${DBWEB_MASTER_KEY:?Set DBWEB_MASTER_KEY to a base64-encoded 32-byte key}
+      DBWEB_ADMIN_USERNAME: ${DBWEB_ADMIN_USERNAME:-admin}
+      DBWEB_ADMIN_PASSWORD: ${DBWEB_ADMIN_PASSWORD:?Set a bootstrap password of at least 12 characters}
+    ports:
+      - "${DBWEB_PORT:-3000}:3000"
+    volumes:
+      - dbweb-data:/app/data
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  dbweb-data:
