@@ -4,11 +4,13 @@ import {
   PostgresDialect,
   SqliteDialect,
   type ColumnType,
+  type Generated,
 } from 'kysely'
 import { Pool } from 'pg'
 
 import type { DdlCommand } from '../ddl/ddl-command.js'
 import type { DdlAuditEntry } from '../ddl/ddl-service.js'
+import type { SecurityAuditAction } from '../security/security-audit.js'
 
 interface UsersTable {
   id: string
@@ -16,7 +18,14 @@ interface UsersTable {
   normalized_username: string
   password_hash: string
   role: 'admin' | 'user'
+  enabled: Generated<number>
+  password_change_required: Generated<number>
   created_at: string
+}
+
+interface AuthLifecycleLockTable {
+  id: number
+  revision: number
 }
 
 interface SessionsTable {
@@ -48,6 +57,17 @@ interface ConnectionsTable {
   created_by: string
   created_at: string
   encrypted_secrets: string
+}
+
+interface WebAccessAssignmentsTable {
+  user_id: string
+  connection_id: string
+  structure_read: number
+  data_read: number
+  query_read: number
+  data_write: number
+  ddl_write: number
+  account_manage: number
 }
 
 interface QueryAuditsTable {
@@ -118,7 +138,21 @@ interface DdlAuditsTable {
   expires_at: string
 }
 
+interface SecurityAuditsTable {
+  id: string
+  actor_id: string
+  target_user_id: string | null
+  connection_id: string | null
+  action: SecurityAuditAction
+  status: 'success' | 'failed'
+  encrypted_details: string
+  error_code: string | null
+  created_at: string
+  expires_at: string
+}
+
 export interface MetadataDatabase {
+  auth_lifecycle_lock: AuthLifecycleLockTable
   users: UsersTable
   sessions: SessionsTable
   connections: ConnectionsTable
@@ -126,8 +160,10 @@ export interface MetadataDatabase {
   keepalive_events: KeepAliveEventsTable
   mutation_audits: MutationAuditsTable
   query_audits: QueryAuditsTable
+  security_audits: SecurityAuditsTable
   ssh_host_key_resets: SshHostKeyResetsTable
   ssh_known_hosts: SshKnownHostsTable
+  web_access_assignments: WebAccessAssignmentsTable
 }
 
 export type MetadataKysely = Kysely<MetadataDatabase>
@@ -166,7 +202,36 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .addColumn('normalized_username', 'varchar(128)', (column) => column.notNull().unique())
     .addColumn('password_hash', 'varchar(512)', (column) => column.notNull())
     .addColumn('role', 'varchar(16)', (column) => column.notNull())
+    .addColumn('enabled', 'integer', (column) => column.notNull().defaultTo(1))
+    .addColumn('password_change_required', 'integer', (column) => column.notNull().defaultTo(0))
     .addColumn('created_at', 'varchar(35)', (column) => column.notNull())
+    .execute()
+
+  const usersTable = (await database.introspection.getTables()).find((table) => table.name === 'users')
+  const userColumns = new Set(usersTable?.columns.map((column) => column.name))
+  if (!userColumns.has('enabled')) {
+    await database.schema
+      .alterTable('users')
+      .addColumn('enabled', 'integer', (column) => column.notNull().defaultTo(1))
+      .execute()
+  }
+  if (!userColumns.has('password_change_required')) {
+    await database.schema
+      .alterTable('users')
+      .addColumn('password_change_required', 'integer', (column) => column.notNull().defaultTo(0))
+      .execute()
+  }
+
+  await database.schema
+    .createTable('auth_lifecycle_lock')
+    .ifNotExists()
+    .addColumn('id', 'integer', (column) => column.primaryKey())
+    .addColumn('revision', 'integer', (column) => column.notNull())
+    .execute()
+  await database
+    .insertInto('auth_lifecycle_lock')
+    .values({ id: 1, revision: 0 })
+    .onConflict((conflict) => conflict.column('id').doNothing())
     .execute()
 
   await database.schema
@@ -227,6 +292,24 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
       .addColumn('ssh_username', 'varchar(128)')
       .execute()
   }
+
+  await database.schema
+    .createTable('web_access_assignments')
+    .ifNotExists()
+    .addColumn('user_id', 'varchar(36)', (column) =>
+      column.notNull().references('users.id').onDelete('cascade'),
+    )
+    .addColumn('connection_id', 'varchar(36)', (column) =>
+      column.notNull().references('connections.id').onDelete('cascade'),
+    )
+    .addColumn('structure_read', 'integer', (column) => column.notNull().defaultTo(0))
+    .addColumn('data_read', 'integer', (column) => column.notNull().defaultTo(0))
+    .addColumn('query_read', 'integer', (column) => column.notNull().defaultTo(0))
+    .addColumn('data_write', 'integer', (column) => column.notNull().defaultTo(0))
+    .addColumn('ddl_write', 'integer', (column) => column.notNull().defaultTo(0))
+    .addColumn('account_manage', 'integer', (column) => column.notNull().defaultTo(0))
+    .addPrimaryKeyConstraint('web_access_assignments_primary_key', ['user_id', 'connection_id'])
+    .execute()
 
   await database.schema
     .createTable('query_audits')
@@ -309,6 +392,21 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .execute()
 
   await database.schema
+    .createTable('security_audits')
+    .ifNotExists()
+    .addColumn('id', 'varchar(36)', (column) => column.primaryKey())
+    .addColumn('actor_id', 'varchar(36)', (column) => column.notNull())
+    .addColumn('target_user_id', 'varchar(36)')
+    .addColumn('connection_id', 'varchar(36)')
+    .addColumn('action', 'varchar(64)', (column) => column.notNull())
+    .addColumn('status', 'varchar(16)', (column) => column.notNull())
+    .addColumn('encrypted_details', 'text', (column) => column.notNull())
+    .addColumn('error_code', 'varchar(64)')
+    .addColumn('created_at', 'varchar(35)', (column) => column.notNull())
+    .addColumn('expires_at', 'varchar(35)', (column) => column.notNull())
+    .execute()
+
+  await database.schema
     .createIndex('query_audits_expires_at_index')
     .ifNotExists()
     .on('query_audits')
@@ -333,6 +431,13 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .createIndex('keepalive_events_expires_at_index')
     .ifNotExists()
     .on('keepalive_events')
+    .column('expires_at')
+    .execute()
+
+  await database.schema
+    .createIndex('security_audits_expires_at_index')
+    .ifNotExists()
+    .on('security_audits')
     .column('expires_at')
     .execute()
 }
