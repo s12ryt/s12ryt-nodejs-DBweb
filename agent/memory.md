@@ -55,4 +55,6 @@
 - 完成受限原生帳號建立、外部帳號輪替納管、密碼輪替、停啟、手動驗證、刪除後 14 天復原及過期敏感 metadata 清理；復原不還原 grants，管理員單次查看密碼需本人 Argon2id Web 密碼重驗。
 - 完成 PostgreSQL 9.6+ 與 MySQL 5.6/8.4 版本化 gateway；MySQL 5.6 以不可知隨機密碼模擬停用並於啟用時恢復受管密碼，新版使用 ACCOUNT LOCK。所有 driver 錯誤維持安全 `NATIVE_ACCOUNT_FAILED`。
 - 完成背景憑證驗證與 scheduler：每 connection 最多五並行，第一次失敗 30 分鐘重試，第二次標記 stale，正常週期可恢復；排程停止會等待進行中 tick，驗證及生命週期事件寫入 365 天加密 security audit。
-- 完成原生帳號 HTTP/runtime 組裝與雙語前端工作台；受保護帳號無危險控制，管理員密碼只顯示於暫時 React state。App tests 20/20、M4B targeted 後端 46/46、API/Web strict typecheck與lint通過。新增四版本真實帳號建立、輪替、停啟、驗證與刪除 integration，MySQL CI前置只授予一般測試帳號必要的CREATE USER及mysql.user讀寫權限，待GitHub Actions實跑。
+- 完成原生帳號 HTTP/runtime 組裝與雙語前端工作台；受保護帳號無危險控制，管理員密碼只顯示於暫時 React state。App tests 20/20、M4B targeted 後端 46/46、API/Web strict typecheck與lint通過，並新增四版本真實帳號建立、輪替、停啟、驗證與刪除 integration。
+- M4B 遠端驗收依序由 runs `30611168882`、`30611584311`、`30611986740`、`30612370976`、`30612718012`、`30613303198`、`30613945287`、`30614208048`、`30614456468`、`30615220500` 與 `30616092914` 收斂 MySQL 測試前置、5.6 帳號名稱上限、資源限制語法及委派權限問題；暫時診斷均已移除。
+- MySQL 5.6 建立帳號採 `CREATE USER` 後 `GRANT USAGE ... WITH MAX_USER_CONNECTIONS`；CI 只對受保護 DBWeb 管理連線授予 `CREATE USER ... WITH GRANT OPTION`，受管帳號仍無管理權限。最終 GitHub Actions run `30616451344` 的 quality、Docker、三瀏覽器、PostgreSQL 9.6/17 與 MySQL 5.6/8.4 全數通過，M4B 驗收完成。

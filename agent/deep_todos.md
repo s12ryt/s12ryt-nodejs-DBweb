@@ -58,4 +58,6 @@
 - 2026-07-31：M4B 完成 PostgreSQL role 與 MySQL user@host 的實際帳號列舉、保護規則、受限建立、納管輪替、停啟、手動驗證、刪除與 14 天無 grants 復原；連線帳號與系統帳號維持只讀保護。
 - 2026-07-31：原生帳號密碼預設生成 32 字元並以 account ID 綁定 AES-GCM 密文保存；管理員須用本人 Web 密碼單次重驗才可查看，一般 account manager 永不取得明文。所有生命週期及驗證事件納入 365 天安全稽核且不保存密碼或 driver 錯誤。
 - 2026-07-31：背景憑證驗證依 connection 最多五筆並行，預設每六小時；第一次失敗 30 分鐘後重試一次，第二次標記 credential-stale。scheduler 防重疊並在 runtime 關閉時等待 in-flight tick。
-- 2026-07-31：M4B 前端完成原生帳號建立、納管、輪替、立即驗證、停啟、刪除復原及管理員重驗查看密碼；受保護帳號不顯示危險操作，一次性密碼只存在 React 暫時狀態。前端行為 20/20、M4B targeted 後端 46/46 通過；四版本真實帳號生命週期已加入 CI，等待遠端驗證。
+- 2026-07-31：M4B 前端完成原生帳號建立、納管、輪替、立即驗證、停啟、刪除復原及管理員重驗查看密碼；受保護帳號不顯示危險操作，一次性密碼只存在 React 暫時狀態。前端行為 20/20、M4B targeted 後端 46/46 通過。
+- 2026-07-31：M4B 遠端矩陣依序抓到 MySQL 5.6 不支援 `DROP USER IF EXISTS`、帳號名稱上限 16 字元、`CREATE USER` 不接受新版資源限制語法，以及設定 `MAX_USER_CONNECTIONS` 需由具委派能力的 DBWeb 管理連線執行 `GRANT USAGE`。診斷只存在 integration test，正式 gateway 始終遮蔽 driver 細節。
+- 2026-07-31：MySQL 5.6 改用 `CREATE USER` 後 `GRANT USAGE ... WITH MAX_USER_CONNECTIONS`；CI 的受保護 DBWeb 管理連線明確取得 `CREATE USER ... WITH GRANT OPTION`，受管帳號本身仍不取得管理權限。GitHub Actions run `30616451344` 的 quality、container、browser、PostgreSQL 9.6/17、MySQL 5.6/8.4 全綠，M4B 完成並進入 M4C。
