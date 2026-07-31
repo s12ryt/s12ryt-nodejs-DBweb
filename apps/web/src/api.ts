@@ -1,0 +1,105 @@
+export type Locale = 'zh-TW' | 'en'
+export type UserRole = 'admin' | 'user'
+
+export interface User {
+  id: string
+  username: string
+  role: UserRole
+}
+
+export interface Session {
+  user: User
+  csrfToken: string
+}
+
+export interface ConnectionProfile {
+  id: string
+  name: string
+  engine: 'postgres' | 'mysql'
+  host: string
+  port: number
+  database: string
+  username: string
+  tls: { mode: string; hasCa: boolean; hasClientCertificate: boolean }
+  keepAlive: { enabled: boolean; intervalMs: number }
+  ssh?:
+    | { enabled: false }
+    | { enabled: true; host: string; port: number; username: string }
+  createdBy: string
+  createdAt: string
+}
+
+export interface DatabaseTable {
+  schema: string
+  name: string
+  type: 'table' | 'view'
+}
+
+export interface DatabaseColumn {
+  name: string
+  dataType: string
+  nullable: boolean
+  primaryKey: boolean
+  defaultValue?: string
+}
+
+export interface RowPage {
+  columns: string[]
+  rows: Array<Record<string, unknown>>
+  nextOffset: number | null
+}
+
+export interface QueryResult {
+  columns: string[]
+  rows: Array<Record<string, unknown>>
+  affectedRows: number
+  truncated: boolean
+  durationMs: number
+}
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+export async function apiRequest<T>(
+  path: string,
+  options: {
+    method?: 'GET' | 'POST'
+    body?: unknown
+    csrfToken?: string
+    locale: Locale
+    signal?: AbortSignal
+  },
+): Promise<T> {
+  const response = await fetch(path, {
+    method: options.method ?? 'GET',
+    credentials: 'include',
+    headers: {
+      'accept-language': options.locale,
+      ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+      ...(options.csrfToken ? { 'x-csrf-token': options.csrfToken } : {}),
+    },
+    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    ...(options.signal ? { signal: options.signal } : {}),
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => undefined)) as
+      | { error?: { code?: string; message?: string } }
+      | undefined
+    throw new ApiError(
+      response.status,
+      payload?.error?.code ?? 'REQUEST_FAILED',
+      payload?.error?.message ?? `HTTP ${response.status}`,
+    )
+  }
+  if (response.status === 204) return undefined as T
+  return (await response.json()) as T
+}
