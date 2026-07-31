@@ -124,7 +124,7 @@ jobs:
           "import mysql from 'mysql2/promise';
           const connection = await mysql.createConnection({ host: '127.0.0.1', port: 3306, user: 'root', password: 'dbweb-root-password' });
           await connection.query('SET GLOBAL log_bin_trust_function_creators = 1');
-          await connection.query(\"GRANT CREATE USER ON *.* TO 'dbweb'@'%'\");
+          await connection.query(\"GRANT CREATE USER ON *.* TO 'dbweb'@'%' WITH GRANT OPTION\");
           await connection.query(\"GRANT SELECT ON mysql.user TO 'dbweb'@'%'\");
           await connection.query(\"GRANT UPDATE ON mysql.* TO 'dbweb'@'%'\");
           await connection.end();"
