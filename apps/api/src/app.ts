@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { Readable } from 'node:stream'
 
 import cookie from '@fastify/cookie'
 import helmet from '@fastify/helmet'
@@ -41,6 +42,19 @@ import {
   type SqlQueryService,
 } from './query/sql-query-service.js'
 import type { SshKnownHostService } from './ssh/ssh-known-host-service.js'
+import { TransferChunkError } from './transfers/encrypted-chunk-store.js'
+import {
+  TransferDownloadError,
+  type TransferDownloadService,
+} from './transfers/transfer-download-service.js'
+import {
+  TransferJobError,
+  type TransferJobService,
+} from './transfers/transfer-job.js'
+import {
+  TransferUploadError,
+  type TransferUploadService,
+} from './transfers/transfer-upload-service.js'
 
 interface BuildAppOptions {
   authService: AuthService
@@ -53,6 +67,9 @@ interface BuildAppOptions {
   webAccessService?: WebAccessService
   nativeAccountService?: NativeAccountService
   nativeGrantService?: NativeGrantService
+  transferJobService?: TransferJobService
+  transferUploadService?: TransferUploadService
+  transferDownloadService?: TransferDownloadService
   csrfSecret: Buffer
   production: boolean
   staticRoot?: string
@@ -126,6 +143,25 @@ const messages = {
     USER_NOT_FOUND: 'User not found',
     WEAK_PASSWORD: 'Password must contain at least 12 characters',
     WEAK_NATIVE_ACCOUNT_PASSWORD: 'Native database account passwords must contain at least 16 characters',
+    ACTIVE_JOB_LIMIT_REACHED: 'Active transfer job limit reached',
+    INVALID_JOB: 'Invalid transfer job',
+    JOB_NOT_FOUND: 'Transfer job not found',
+    INVALID_JOB_TRANSITION: 'Invalid transfer job state transition',
+    INVALID_JOB_PROGRESS: 'Invalid transfer job progress',
+    INVALID_CHUNK: 'Invalid transfer chunk',
+    CHUNK_CHECKSUM_MISMATCH: 'Transfer chunk checksum mismatch',
+    CHUNK_CONFLICT: 'Transfer chunk conflicts with an existing chunk',
+    CHUNK_TOO_LARGE: 'Transfer chunk is too large',
+    TRANSFER_TOO_LARGE: 'Transfer exceeds the size limit',
+    CHUNK_NOT_FOUND: 'Transfer chunk not found',
+    CHUNK_CORRUPTED: 'Transfer chunk is corrupted',
+    UPLOAD_NOT_ALLOWED: 'Upload is not allowed for this transfer job',
+    UPLOAD_ALREADY_COMPLETED: 'Transfer upload is already complete',
+    INCOMPLETE_UPLOAD: 'Transfer upload is incomplete',
+    FILE_SIZE_MISMATCH: 'Transfer file size mismatch',
+    FILE_CHECKSUM_MISMATCH: 'Transfer file checksum mismatch',
+    DOWNLOAD_NOT_READY: 'Transfer output is not ready for download',
+    OUTPUT_NOT_FOUND: 'Transfer output was not found',
   },
   'zh-TW': {
     FORBIDDEN: '權限不足',
@@ -181,6 +217,25 @@ const messages = {
     USER_NOT_FOUND: '找不到使用者',
     WEAK_PASSWORD: '密碼至少需要 12 個字元',
     WEAK_NATIVE_ACCOUNT_PASSWORD: '原生資料庫帳號密碼至少需要 16 個字元',
+    ACTIVE_JOB_LIMIT_REACHED: '進行中的傳輸工作已達上限',
+    INVALID_JOB: '傳輸工作設定無效',
+    JOB_NOT_FOUND: '找不到傳輸工作',
+    INVALID_JOB_TRANSITION: '傳輸工作狀態轉換無效',
+    INVALID_JOB_PROGRESS: '傳輸工作進度無效',
+    INVALID_CHUNK: '傳輸分段無效',
+    CHUNK_CHECKSUM_MISMATCH: '傳輸分段校驗碼不符',
+    CHUNK_CONFLICT: '傳輸分段與既有內容衝突',
+    CHUNK_TOO_LARGE: '傳輸分段超過大小限制',
+    TRANSFER_TOO_LARGE: '傳輸檔案超過大小限制',
+    CHUNK_NOT_FOUND: '找不到傳輸分段',
+    CHUNK_CORRUPTED: '傳輸分段已損毀',
+    UPLOAD_NOT_ALLOWED: '此傳輸工作不允許上傳',
+    UPLOAD_ALREADY_COMPLETED: '傳輸上傳已完成',
+    INCOMPLETE_UPLOAD: '傳輸上傳尚未完整',
+    FILE_SIZE_MISMATCH: '傳輸檔案大小不符',
+    FILE_CHECKSUM_MISMATCH: '傳輸檔案校驗碼不符',
+    DOWNLOAD_NOT_READY: '傳輸輸出尚未可供下載',
+    OUTPUT_NOT_FOUND: '找不到傳輸輸出',
   },
 } as const
 
@@ -284,6 +339,41 @@ function handleNativeGrantError(
   })
 }
 
+function handleTransferError(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  error: unknown,
+) {
+  if (error instanceof TransferJobError) {
+    if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+    if (error.code === 'JOB_NOT_FOUND') return sendError(request, reply, 404, 'JOB_NOT_FOUND')
+    if (error.code === 'ACTIVE_JOB_LIMIT_REACHED' || error.code === 'INVALID_JOB_TRANSITION') {
+      return sendError(request, reply, 409, error.code)
+    }
+    return sendError(request, reply, 422, error.code)
+  }
+  if (error instanceof TransferChunkError) {
+    if (error.code === 'CHUNK_NOT_FOUND') return sendError(request, reply, 404, error.code)
+    if (error.code === 'CHUNK_CONFLICT') return sendError(request, reply, 409, error.code)
+    if (error.code === 'CHUNK_TOO_LARGE' || error.code === 'TRANSFER_TOO_LARGE') {
+      return sendError(request, reply, 413, error.code)
+    }
+    return sendError(request, reply, 422, error.code)
+  }
+  if (error instanceof TransferUploadError) {
+    if (error.code === 'UPLOAD_NOT_ALLOWED' || error.code === 'UPLOAD_ALREADY_COMPLETED') {
+      return sendError(request, reply, 409, error.code)
+    }
+    return sendError(request, reply, 422, error.code)
+  }
+  if (error instanceof TransferDownloadError) {
+    if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+    if (error.code === 'OUTPUT_NOT_FOUND') return sendError(request, reply, 404, error.code)
+    return sendError(request, reply, 409, error.code)
+  }
+  throw error
+}
+
 function publicManagedAccount(account: StoredNativeAccount) {
   const { encryptedPassword: _encryptedPassword, ...publicAccount } = account
   void _encryptedPassword
@@ -323,6 +413,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     },
   })
   await app.register(rateLimit, { global: false, max: 100, timeWindow: '1 minute' })
+  app.addContentTypeParser(
+    'application/octet-stream',
+    { parseAs: 'buffer', bodyLimit: 8 * 1024 * 1024 },
+    (_request, body, done) => done(null, body),
+  )
 
   async function authenticate(
     request: FastifyRequest,
@@ -367,6 +462,196 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   }
 
   app.get('/api/health', async () => ({ status: 'ok' }))
+
+  if (options.transferJobService && options.transferUploadService) {
+    const jobs = options.transferJobService
+    const uploads = options.transferUploadService
+    const jobParamsSchema = {
+      type: 'object', additionalProperties: false, required: ['jobId'],
+      properties: { jobId: { type: 'string', format: 'uuid' } },
+    } as const
+
+    app.post<{
+      Body: {
+        connectionId: string
+        direction: 'import' | 'export'
+        format: 'csv' | 'json' | 'sql'
+        includeData?: boolean
+      }
+    }>(
+      '/api/transfers',
+      {
+        schema: {
+          body: {
+            type: 'object', additionalProperties: false,
+            required: ['connectionId', 'direction', 'format'],
+            properties: {
+              connectionId: { type: 'string', minLength: 1, maxLength: 128 },
+              direction: { type: 'string', enum: ['import', 'export'] },
+              format: { type: 'string', enum: ['csv', 'json', 'sql'] },
+              includeData: { type: 'boolean' },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor || !validateCsrf(request, reply)) return
+        try {
+          return reply.code(201).send(await jobs.create(actor, request.body))
+        } catch (error) {
+          return handleTransferError(request, reply, error)
+        }
+      },
+    )
+
+    app.get('/api/transfers', async (request, reply) => {
+      const actor = await authenticate(request, reply)
+      if (!actor) return
+      return jobs.list(actor)
+    })
+
+    app.get<{ Params: { jobId: string } }>(
+      '/api/transfers/:jobId',
+      { schema: { params: jobParamsSchema } },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor) return
+        try {
+          return await jobs.get(actor, request.params.jobId)
+        } catch (error) {
+          return handleTransferError(request, reply, error)
+        }
+      },
+    )
+
+    app.post<{ Params: { jobId: string }; Body: Record<string, never> }>(
+      '/api/transfers/:jobId/cancel',
+      {
+        schema: {
+          params: jobParamsSchema,
+          body: { type: 'object', additionalProperties: false, maxProperties: 0 },
+        },
+      },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor || !validateCsrf(request, reply)) return
+        try {
+          return await jobs.cancel(actor, request.params.jobId)
+        } catch (error) {
+          return handleTransferError(request, reply, error)
+        }
+      },
+    )
+
+    app.get<{ Params: { jobId: string } }>(
+      '/api/transfers/:jobId/chunks',
+      { schema: { params: jobParamsSchema } },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor) return
+        try {
+          return await uploads.list(actor, request.params.jobId)
+        } catch (error) {
+          return handleTransferError(request, reply, error)
+        }
+      },
+    )
+
+    app.put<{
+      Params: { jobId: string; index: number }
+      Headers: { 'x-chunk-sha256'?: string }
+      Body: Buffer
+    }>(
+      '/api/transfers/:jobId/chunks/:index',
+      {
+        schema: {
+          params: {
+            type: 'object', additionalProperties: false, required: ['jobId', 'index'],
+            properties: {
+              jobId: { type: 'string', format: 'uuid' },
+              index: { type: 'integer', minimum: 0 },
+            },
+          },
+          headers: {
+            type: 'object',
+            required: ['x-chunk-sha256'],
+            properties: { 'x-chunk-sha256': { type: 'string', pattern: '^[0-9a-f]{64}$' } },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor || !validateCsrf(request, reply)) return
+        try {
+          return await uploads.put(
+            actor,
+            request.params.jobId,
+            request.params.index,
+            request.body,
+            request.headers['x-chunk-sha256'] as string,
+          )
+        } catch (error) {
+          return handleTransferError(request, reply, error)
+        }
+      },
+    )
+
+    app.post<{
+      Params: { jobId: string }
+      Body: { size: number; checksum: string }
+    }>(
+      '/api/transfers/:jobId/upload-complete',
+      {
+        schema: {
+          params: jobParamsSchema,
+          body: {
+            type: 'object', additionalProperties: false, required: ['size', 'checksum'],
+            properties: {
+              size: { type: 'integer', minimum: 0, maximum: 10 * 1024 * 1024 * 1024 },
+              checksum: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await authenticate(request, reply)
+        if (!actor || !validateCsrf(request, reply)) return
+        try {
+          return await uploads.complete(
+            actor,
+            request.params.jobId,
+            request.body.size,
+            request.body.checksum,
+          )
+        } catch (error) {
+          return handleTransferError(request, reply, error)
+        }
+      },
+    )
+
+    if (options.transferDownloadService) {
+      const downloads = options.transferDownloadService
+      app.get<{ Params: { jobId: string } }>(
+        '/api/transfers/:jobId/download',
+        { schema: { params: jobParamsSchema } },
+        async (request, reply) => {
+          const actor = await authenticate(request, reply)
+          if (!actor) return
+          try {
+            const download = await downloads.open(actor, request.params.jobId)
+            return reply
+              .header('content-type', 'application/octet-stream')
+              .header('content-length', String(download.size))
+              .header('content-disposition', `attachment; filename="${download.filename}"`)
+              .send(Readable.from(download.stream))
+          } catch (error) {
+            return handleTransferError(request, reply, error)
+          }
+        },
+      )
+    }
+  }
 
   app.post<{ Body: LoginBody }>(
     '/api/auth/login',
