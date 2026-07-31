@@ -37,12 +37,19 @@ describe.runIf(engine === 'postgres')('PostgreSQL native account integration', (
   it('creates, rotates, disables, enables, verifies, and deletes a restricted role', async () => {
     await postgresQuery('DROP ROLE IF EXISTS dbweb_native_test')
     try {
-      await gateway.createAccount(connection, {
-        identity,
-        password: initialPassword,
-        canLogin: true,
-        connectionLimit: 2,
-      })
+      try {
+        await gateway.createAccount(connection, {
+          identity,
+          password: initialPassword,
+          canLogin: true,
+          connectionLimit: 2,
+        })
+      } catch (error) {
+        const rows = await mysqlAdminQuery(
+          "SELECT User AS dbweb_user, max_user_connections AS dbweb_limit FROM mysql.user WHERE User = 'dbweb_nat_test' AND Host = '%'",
+        )
+        throw new Error(JSON.stringify({ accountStateAfterFailure: rows }), { cause: error })
+      }
       expect(await gateway.listAccounts(connection)).toEqual(expect.arrayContaining([
         expect.objectContaining({ identity, canLogin: true, connectionLimit: 2, systemAccount: false }),
       ]))
