@@ -67,12 +67,16 @@ export class PostgresDataMutationGateway implements DataMutationGateway {
       return {
         schema,
         name: table,
-        columns: columnResult.rows.map((row) => ({
-          name: String(row.column_name),
-          valueType: postgresValueType(String(row.type_name), String(row.type_category)),
-          nullable: row.nullable === true,
-          generated: /^nextval\(/i.test(String(row.default_expression ?? '')),
-        })),
+        columns: columnResult.rows.map((row) => {
+          const defaultExpression = row.default_expression
+          return {
+            name: String(row.column_name),
+            valueType: postgresValueType(String(row.type_name), String(row.type_category)),
+            nullable: row.nullable === true,
+            generated: /^nextval\(/i.test(String(defaultExpression ?? '')),
+            hasDefault: defaultExpression != null,
+          }
+        }),
         uniqueKeys: keyResult.rows.map(mapPostgresKey),
       }
     })

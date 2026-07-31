@@ -5,6 +5,7 @@ export interface MutationColumn {
   valueType: DatabaseValueType | 'unsupported'
   nullable: boolean
   generated: boolean
+  hasDefault?: boolean
 }
 
 export interface MutationUniqueKey {

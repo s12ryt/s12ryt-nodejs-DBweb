@@ -23,7 +23,7 @@ describe('PostgresDataMutationGateway', () => {
       .fn()
       .mockResolvedValueOnce({ rows: [
         { column_name: 'id', type_name: 'int8', type_category: 'N', nullable: false, default_expression: "nextval('orders_id_seq'::regclass)" },
-        { column_name: 'email', type_name: 'text', type_category: 'S', nullable: false, default_expression: null },
+        { column_name: 'email', type_name: 'text', type_category: 'S', nullable: false, default_expression: "'unknown'::text" },
         { column_name: 'payload', type_name: 'jsonb', type_category: 'U', nullable: true, default_expression: null },
       ] })
       .mockResolvedValueOnce({ rows: [
@@ -37,9 +37,9 @@ describe('PostgresDataMutationGateway', () => {
       schema: 'odd"schema',
       name: 'orders',
       columns: [
-        { name: 'id', valueType: 'bigint', nullable: false, generated: true },
-        { name: 'email', valueType: 'string', nullable: false, generated: false },
-        { name: 'payload', valueType: 'json', nullable: true, generated: false },
+        { name: 'id', valueType: 'bigint', nullable: false, generated: true, hasDefault: true },
+        { name: 'email', valueType: 'string', nullable: false, generated: false, hasDefault: true },
+        { name: 'payload', valueType: 'json', nullable: true, generated: false, hasDefault: false },
       ],
       uniqueKeys: [
         { name: 'orders_pkey', kind: 'primary', columns: ['id'] },
