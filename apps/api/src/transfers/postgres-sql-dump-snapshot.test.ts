@@ -98,6 +98,10 @@ describe('PostgreSQL SQL dump snapshot', () => {
     expect(queries[0]).toBe('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
     expect(queries.at(-1)).toBe('COMMIT')
     expect(queries.some((sql) => sql.includes('FROM pg_catalog.pg_sequence'))).toBe(false)
+    expect(queries.find((sql) => sql.includes('dbweb_constraint_type')))
+      .toContain('con.conbin')
+    expect(queries.find((sql) => sql.includes('dbweb_constraint_type')))
+      .toMatch(/GROUP BY[^]*con\.conbin/)
     expect(cursor.sql).toContain('SELECT "id", "code" FROM "public"."orders"')
   })
 
@@ -293,6 +297,8 @@ describe('PostgreSQL SQL dump snapshot', () => {
       }],
     }))
     expect(queries.find((sql) => sql.includes('dbweb_routine_kind'))).toContain("dep.deptype = 'e'")
+    expect(queries.find((sql) => sql.includes('dbweb_routine_kind')))
+      .toContain('(COALESCE(p.proallargtypes, p.proargtypes::oid[]))[s.i]')
     expect(queries.find((sql) => sql.includes('dbweb_table_schema'))).toContain('pg_get_partkeydef')
   })
 })

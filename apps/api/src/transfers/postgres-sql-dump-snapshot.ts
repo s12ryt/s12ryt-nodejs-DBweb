@@ -418,7 +418,7 @@ class PostgresSqlDumpSnapshotSession implements SqlDumpSnapshotSession {
                 SELECT json_agg(json_build_object(
                   'name', p.proargnames[s.i],
                   'mode', p.proargmodes[s.i],
-                  'type', pg_catalog.format_type(COALESCE(p.proallargtypes, p.proargtypes::oid[])[s.i], NULL)
+                   'type', pg_catalog.format_type((COALESCE(p.proallargtypes, p.proargtypes::oid[]))[s.i], NULL)
                 ) ORDER BY s.i)
                 FROM generate_subscripts(COALESCE(p.proallargtypes, p.proargtypes::oid[]), 1) s(i)
               ), '[]'::json) AS dbweb_arguments,
@@ -587,7 +587,7 @@ LEFT JOIN pg_catalog.pg_class rc ON rc.oid = con.confrelid
 LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace
 LEFT JOIN pg_catalog.pg_attribute ratt ON ratt.attrelid = rc.oid AND ratt.attnum = con.confkey[key.position]
 WHERE n.nspname = $1 AND c.relname = $2 AND con.contype IN ('p', 'u', 'f', 'c')
-GROUP BY con.oid, con.conname, con.contype, rn.nspname, rc.relname
+GROUP BY con.oid, con.conname, con.contype, con.conbin, con.conrelid, rn.nspname, rc.relname
 ORDER BY CASE con.contype WHEN 'p' THEN 0 ELSE 1 END, con.conname`
 
 const INDEX_QUERY = `SELECT idx.relname AS dbweb_index_name, am.amname AS dbweb_index_method,
