@@ -1,6 +1,6 @@
 # DBWeb 任務紀錄
 
-更新日期：2026-07-31
+更新日期：2026-08-01
 
 ## 目前狀態
 
@@ -15,7 +15,7 @@
 - [x] 完成里程碑四 C：跨 database 權限與完整驗收。
 - [x] 完成里程碑五 A：持久化 job、分段加密暫存、preview 與安全下載基礎。
 - [x] 完成里程碑五 B：CSV/JSON 串流匯入匯出、映射、衝突與續傳。
-- [ ] 完成里程碑五 C：純 Node SQL dump/restore、進階物件、UI與完整驗收。
+- [x] 完成里程碑五 C：純 Node SQL dump/restore、進階物件、UI與完整驗收。
 - [ ] 完成里程碑六：多實例、效能、安全與完整回歸。
 
 ## 歷史決策
@@ -93,3 +93,6 @@
 - 2026-08-01：補齊 SQL roundtrip 前的方言契約：MySQL 第一個 partition 以 `PARTITION BY` 初始化、後續才 `ADD PARTITION`；PostgreSQL partitioned parent保留partition key、`RETURNS trigger`受限pseudo-type，且dump排除extension-owned routines。
 - 2026-08-01：restore plan將partition child排在parent table之後、parent data之前；新增正式 SQL dump/restore integration，串接一致snapshot、用途隔離加密staging、checksummed gzip package、依賴plan與正式方言restore session/data loader。
 - 2026-08-01：本機M5C候選驗收為114個Vitest檔通過、5個integration檔略過，441 tests通過、14個無本機資料庫cases略過；YAML lint、ESLint、strict typecheck、production build與Playwright 7 passed/2 responsive skipped全綠。PG9.6/17與MySQL5.6/8.4 SQL roundtrip仍待GitHub Actions真實執行，M5C尚未結案。
+- 2026-08-01：SQL roundtrip runs `30653534116`、`30653888681`、`30654906166`、`30655546472` 與 `30656045552` 逐步定位 PostgreSQL catalog GROUP BY/array expression/trigger pseudo-type、MySQL 5.6 catalog 差異、MySQL integer tagged value與partition expression相容性；所有正式 gateway/API 始終維持安全錯誤邊界，暫時診斷只存在 integration test。
+- 2026-08-01：MySQL catalog 的完整反引號單一 partition identifier只在snapshot邊界正規化，DDL fragment白名單仍拒絕反引號與任意SQL；commit `481c382` 後 GitHub Actions run `30656631225` 的quality、Docker、browser、PostgreSQL 9.6/17與MySQL 5.6/8.4全部通過，四個DB job均真正完成SQL dump/restore roundtrip。
+- 2026-08-01：移除integration-only診斷後，M5C最終本機回歸為114個Vitest檔通過、5個integration檔略過，442 tests通過、14個無本機DB cases略過；lint、strict typecheck、production build及Playwright 7 passed/2既定responsive skipped全綠。M5C完成並直接進入M6。
