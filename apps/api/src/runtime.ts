@@ -19,10 +19,15 @@ import { DataMutationService } from './data/data-mutation-service.js'
 import { EncryptedMutationAuditRecorder } from './data/mutation-audit.js'
 import { MysqlDataMutationGateway } from './data/mysql-data-mutation-gateway.js'
 import { PostgresDataMutationGateway } from './data/postgres-data-mutation-gateway.js'
+import { EncryptedDdlAuditRecorder } from './ddl/ddl-audit.js'
+import { DdlService } from './ddl/ddl-service.js'
+import { MysqlDdlGateway } from './ddl/mysql-ddl-gateway.js'
+import { PostgresDdlGateway } from './ddl/postgres-ddl-gateway.js'
 import { RetainedKeepAliveRecorder } from './keepalive/keepalive-event.js'
 import { KeepAliveScheduler, SqlKeepAliveService } from './keepalive/sql-keepalive-service.js'
 import { KyselyAuthRepository } from './metadata/kysely-auth-repository.js'
 import { KyselyConnectionRepository } from './metadata/kysely-connection-repository.js'
+import { KyselyDdlAuditRepository } from './metadata/kysely-ddl-audit-repository.js'
 import { KyselyKeepAliveEventRepository } from './metadata/kysely-keepalive-event-repository.js'
 import { KyselyMutationAuditRepository } from './metadata/kysely-mutation-audit-repository.js'
 import { KyselyQueryAuditRepository } from './metadata/kysely-query-audit-repository.js'
@@ -187,6 +192,14 @@ export async function buildRuntime(
         encryption,
       ),
     )
+    const ddlService = new DdlService(
+      connectionService,
+      {
+        postgres: new PostgresDdlGateway(undefined, socketProvider),
+        mysql: new MysqlDdlGateway(undefined, socketProvider),
+      },
+      new EncryptedDdlAuditRecorder(new KyselyDdlAuditRepository(database), encryption),
+    )
     const audit = new EncryptedQueryAuditRecorder(
       new KyselyQueryAuditRepository(database),
       encryption,
@@ -214,6 +227,7 @@ export async function buildRuntime(
       connectionService,
       databaseExplorer,
       dataMutationService,
+      ddlService,
       queryService,
       sshKnownHostService: knownHosts,
       csrfSecret,

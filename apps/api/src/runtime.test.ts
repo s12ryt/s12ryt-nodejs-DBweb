@@ -129,6 +129,10 @@ describe('runtime', () => {
       method: 'GET',
       url: '/api/connections/c1/schemas/public/tables/orders/mutations',
     })).statusCode).toBe(401)
+    expect((await app.inject({
+      method: 'GET',
+      url: '/api/connections/c1/ddl/capabilities',
+    })).statusCode).toBe(401)
     await expect(app.close()).resolves.toBeUndefined()
   }, 20_000)
 })
