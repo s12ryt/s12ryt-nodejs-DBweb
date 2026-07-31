@@ -311,6 +311,108 @@ describe('DBWeb application shell', () => {
     expect(screen.queryByRole('button', { name: '新增資料列' })).not.toBeInTheDocument()
     resolveLogsInspection?.(Response.json(productMutationInspection))
   })
+
+  it('creates a table from live DDL capabilities and confirms destructive DDL', async () => {
+    const ddlBodies: unknown[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url.endsWith('/ddl/capabilities')) return Response.json(postgresDdlCapabilities)
+      if (url.endsWith('/ddl/execute')) {
+        ddlBodies.push(JSON.parse(String(init?.body)))
+        return Response.json({ statementsExecuted: 1, transactional: true })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText('Primary PostgreSQL'))
+    await user.click(screen.getByRole('tab', { name: '結構' }))
+    expect(await screen.findByText('PostgreSQL 17.5.0')).toBeVisible()
+
+    await user.selectOptions(screen.getByLabelText('DDL 操作'), 'create-table')
+    await user.type(screen.getByLabelText('Schema 名稱'), 'public')
+    await user.type(screen.getByLabelText('資料表名稱'), 'orders')
+    await user.type(screen.getByLabelText('欄位名稱'), 'id')
+    await user.selectOptions(screen.getByLabelText('欄位型別'), 'bigint')
+    await user.click(screen.getByRole('button', { name: '執行 DDL' }))
+
+    await user.selectOptions(screen.getByLabelText('DDL 操作'), 'drop-table')
+    await user.type(screen.getByLabelText('Schema 名稱'), 'public')
+    await user.type(screen.getByLabelText('資料表名稱'), 'orders')
+    await user.click(screen.getByRole('button', { name: '執行 DDL' }))
+    const dialog = screen.getByRole('dialog', { name: '確認結構變更' })
+    await user.click(within(dialog).getByRole('button', { name: '刪除' }))
+
+    await waitFor(() => expect(ddlBodies).toEqual([
+      { command: {
+        kind: 'create-table', schema: 'public', name: 'orders',
+        columns: [{ name: 'id', type: { name: 'bigint' }, nullable: false }],
+      } },
+      { command: { kind: 'drop-table', schema: 'public', name: 'orders', confirmed: true } },
+    ]))
+  })
+
+  it('builds column, index, and constraint commands from the complete core DDL action set', async () => {
+    const ddlBodies: unknown[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json([])
+      if (url.endsWith('/ddl/capabilities')) return Response.json(postgresDdlCapabilities)
+      if (url.endsWith('/ddl/execute')) {
+        ddlBodies.push(JSON.parse(String(init?.body)))
+        return Response.json({ statementsExecuted: 1, transactional: true })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText('Primary PostgreSQL'))
+    await user.click(screen.getByRole('tab', { name: '結構' }))
+    await screen.findByText('PostgreSQL 17.5.0')
+    const actions = screen.getByLabelText('DDL 操作')
+    expect(within(actions).getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual([
+      '', 'create-database', 'rename-database', 'drop-database',
+      'create-schema', 'rename-schema', 'drop-schema',
+      'create-table', 'rename-table', 'drop-table',
+      'add-column', 'rename-column', 'drop-column',
+      'create-index', 'drop-index', 'add-constraint', 'drop-constraint',
+    ])
+
+    await user.selectOptions(actions, 'add-column')
+    await user.type(screen.getByLabelText('Schema 名稱'), 'public')
+    await user.type(screen.getByLabelText('資料表名稱'), 'orders')
+    await user.type(screen.getByLabelText('欄位名稱'), 'total')
+    await user.selectOptions(screen.getByLabelText('欄位型別'), 'bigint')
+    await user.click(screen.getByRole('button', { name: '執行 DDL' }))
+
+    await user.selectOptions(screen.getByLabelText('DDL 操作'), 'create-index')
+    await user.type(screen.getByLabelText('Schema 名稱'), 'public')
+    await user.type(screen.getByLabelText('資料表名稱'), 'orders')
+    await user.type(screen.getByLabelText('索引名稱'), 'orders_total_idx')
+    await user.type(screen.getByLabelText('索引欄位'), 'total')
+    await user.click(screen.getByRole('button', { name: '執行 DDL' }))
+
+    await user.selectOptions(screen.getByLabelText('DDL 操作'), 'add-constraint')
+    await user.type(screen.getByLabelText('Schema 名稱'), 'public')
+    await user.type(screen.getByLabelText('資料表名稱'), 'orders')
+    await user.type(screen.getByLabelText('約束名稱'), 'orders_number_key')
+    await user.selectOptions(screen.getByLabelText('約束類型'), 'unique')
+    await user.type(screen.getByLabelText('約束欄位'), 'number')
+    await user.click(screen.getByRole('button', { name: '執行 DDL' }))
+
+    await waitFor(() => expect(ddlBodies).toEqual([
+      { command: { kind: 'add-column', schema: 'public', table: 'orders', column: { name: 'total', type: { name: 'bigint' }, nullable: false } } },
+      { command: { kind: 'create-index', schema: 'public', table: 'orders', name: 'orders_total_idx', method: 'btree', unique: false, parts: [{ column: 'total' }], confirmed: false } },
+      { command: { kind: 'add-constraint', schema: 'public', table: 'orders', name: 'orders_number_key', constraint: { kind: 'unique', columns: ['number'] }, confirmed: false } },
+    ]))
+  })
 })
 
 const authenticatedSession = {
@@ -356,6 +458,19 @@ const productMutationInspection = {
     canUpdate: true,
     canDelete: true,
   },
+}
+
+const postgresDdlCapabilities = {
+  engine: 'postgres',
+  version: { major: 17, minor: 5, patch: 0, assumedMinimum: false },
+  transactionalDdl: true,
+  columnTypes: ['bigint', 'text', 'varchar'],
+  database: { create: true, drop: true, rename: true, owner: true },
+  schema: { create: true, drop: true, rename: true, owner: true, databaseAlias: false },
+  table: { create: true, drop: true, rename: true, owner: true, storageOptions: false },
+  column: { generated: false, identity: true, rename: true, renameSyntax: 'rename-column' },
+  constraint: { check: true, foreignKey: true, primaryKey: true, unique: true },
+  index: { methods: ['btree', 'hash', 'gin', 'gist', 'brin'], expression: true, partial: true, prefixLength: false },
 }
 
 const productOriginal = {

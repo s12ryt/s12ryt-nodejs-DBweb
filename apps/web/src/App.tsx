@@ -17,6 +17,7 @@ import {
   Table2,
   Trash2,
   UserPlus,
+  Wrench,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
@@ -29,6 +30,7 @@ import {
   type DatabaseTable,
   type DataMutationInspection,
   type DatabaseValueType,
+  type DdlCapabilities,
   type Locale,
   type QueryResult,
   type RowPage,
@@ -210,7 +212,7 @@ function EmptyWorkspace({ title, text }: { title: string; text: string }) {
 
 function ConnectionWorkspace({ connection, locale, csrfToken, isAdmin }: { connection: ConnectionProfile; locale: Locale; csrfToken: string; isAdmin: boolean }) {
   const t = translations(locale)
-  const [tab, setTab] = useState<'browse' | 'query'>('browse')
+  const [tab, setTab] = useState<'browse' | 'query' | 'structure'>('browse')
   const [confirmingReset, setConfirmingReset] = useState(false)
   const [error, setError] = useState('')
   const ssh = connection.ssh?.enabled ? connection.ssh : undefined
@@ -235,11 +237,196 @@ function ConnectionWorkspace({ connection, locale, csrfToken, isAdmin }: { conne
       <div className="tabs" role="tablist">
         <button role="tab" aria-selected={tab === 'browse'} onClick={() => setTab('browse')}><Table2 size={17} />{t('rows')}</button>
         <button role="tab" aria-selected={tab === 'query'} onClick={() => setTab('query')}><Braces size={17} />{t('query')}</button>
+        {isAdmin && <button role="tab" aria-selected={tab === 'structure'} onClick={() => setTab('structure')}><Wrench size={17} />{t('structure')}</button>}
       </div>
-      {tab === 'browse' ? <DataBrowser connectionId={connection.id} locale={locale} csrfToken={csrfToken} isAdmin={isAdmin} /> : <QueryEditor connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
+      {tab === 'browse' && <DataBrowser connectionId={connection.id} locale={locale} csrfToken={csrfToken} isAdmin={isAdmin} />}
+      {tab === 'query' && <QueryEditor connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
+      {tab === 'structure' && isAdmin && <DdlWorkbench connectionId={connection.id} locale={locale} csrfToken={csrfToken} />}
       {confirmingReset && <ConfirmDialog title={t('sshReset')} body={t('sshResetBody')} confirm={t('sshResetConfirm')} cancel={t('cancel')} onCancel={() => setConfirmingReset(false)} onConfirm={() => void resetSshHostKey()} />}
     </div>
   )
+}
+
+const DDL_ACTIONS = [
+  'create-database', 'rename-database', 'drop-database',
+  'create-schema', 'rename-schema', 'drop-schema',
+  'create-table', 'rename-table', 'drop-table',
+  'add-column', 'rename-column', 'drop-column',
+  'create-index', 'drop-index', 'add-constraint', 'drop-constraint',
+] as const
+type CoreDdlAction = (typeof DDL_ACTIONS)[number]
+
+function DdlWorkbench({ connectionId, locale, csrfToken }: { connectionId: string; locale: Locale; csrfToken: string }) {
+  const t = translations(locale)
+  const [capabilities, setCapabilities] = useState<DdlCapabilities>()
+  const [action, setAction] = useState<CoreDdlAction>()
+  const [pendingCommand, setPendingCommand] = useState<Record<string, unknown>>()
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<{ statementsExecuted: number; transactional: boolean }>()
+
+  useEffect(() => {
+    setError('')
+    void apiRequest<DdlCapabilities>(`/api/connections/${encodeURIComponent(connectionId)}/ddl/capabilities`, { locale })
+      .then(setCapabilities)
+      .catch((cause) => setError(errorMessage(cause)))
+  }, [connectionId, locale])
+
+  async function execute(command: Record<string, unknown>) {
+    setError('')
+    try {
+      setResult(await apiRequest(`/api/connections/${encodeURIComponent(connectionId)}/ddl/execute`, {
+        method: 'POST', locale, csrfToken, body: { command },
+      }))
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!action) return
+    const data = new FormData(event.currentTarget)
+    const command = buildCoreDdlCommand(action, data, capabilities)
+    if (requiresDdlConfirmation(command)) {
+      setPendingCommand({ ...command, confirmed: true })
+      return
+    }
+    void execute(command)
+  }
+
+  const versionLabel = capabilities
+    ? `${capabilities.engine === 'postgres' ? 'PostgreSQL' : 'MySQL'} ${capabilities.version.major}.${capabilities.version.minor}.${capabilities.version.patch}`
+    : undefined
+
+  return (
+    <section className="ddl-layout">
+      <header className="ddl-toolbar">
+        <div><span className="eyebrow">DDL CAPABILITIES</span>{versionLabel && <h2>{versionLabel}</h2>}</div>
+        {result && <span className="status online">{result.statementsExecuted} DDL</span>}
+      </header>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      <form className="ddl-form" key={action ?? 'none'} onSubmit={submit}>
+        <Field label={t('ddlAction')}>
+          <select value={action ?? ''} onChange={(event) => setAction(event.target.value as CoreDdlAction)}>
+            <option value="" disabled>{t('ddlAction')}</option>
+            {DDL_ACTIONS.map((item) => <option key={item} value={item} disabled={!ddlActionSupported(item, capabilities)}>{t(ddlActionLabel(item))}</option>)}
+          </select>
+        </Field>
+        {action && <>
+          <DdlCommandFields action={action} capabilities={capabilities} locale={locale} />
+          <div className="ddl-actions"><button className={action.startsWith('drop-') ? 'danger-button' : 'primary-button'} type="submit"><Wrench size={16} />{t('ddlRun')}</button></div>
+        </>}
+      </form>
+      {pendingCommand && <ConfirmDialog title={t('ddlConfirmTitle')} body={t('ddlConfirmBody')} confirm={t('delete')} cancel={t('cancel')} onCancel={() => setPendingCommand(undefined)} onConfirm={() => { const command = pendingCommand; setPendingCommand(undefined); void execute(command) }} />}
+    </section>
+  )
+}
+
+function DdlCommandFields({ action, capabilities, locale }: { action: CoreDdlAction; capabilities: DdlCapabilities | undefined; locale: Locale }) {
+  const t = translations(locale)
+  const databaseAction = action.endsWith('-database')
+  const schemaAction = action.endsWith('-schema')
+  const tableObjectAction = action.endsWith('-table')
+  const columnAction = action.endsWith('-column')
+  const indexAction = action.endsWith('-index')
+  const constraintAction = action.endsWith('-constraint')
+  const rename = action.startsWith('rename-')
+  const createColumn = action === 'create-table' || action === 'add-column' || (action === 'rename-column' && capabilities?.column.renameSyntax === 'change-column')
+  return <>
+    {databaseAction && !rename && <Field label={t('database')}><input name="name" required autoFocus /></Field>}
+    {schemaAction && !rename && <Field label={t('ddlSchemaName')}><input name="name" required autoFocus /></Field>}
+    {(tableObjectAction || columnAction || indexAction || constraintAction) && <Field label={t('ddlSchemaName')}><input name="schema" required autoFocus /></Field>}
+    {(columnAction || indexAction || constraintAction) && <Field label={t('ddlTableName')}><input name="table" required /></Field>}
+    {tableObjectAction && !rename && <Field label={t('ddlTableName')}><input name="name" required /></Field>}
+    {rename && <><Field label={t('ddlFromName')}><input name="from" required autoFocus /></Field><Field label={t('ddlToName')}><input name="to" required /></Field></>}
+    {columnAction && !rename && <Field label={t('ddlColumnName')}><input name="name" required /></Field>}
+    {createColumn && <>
+      {action === 'create-table' && <Field label={t('ddlColumnName')}><input name="column" required /></Field>}
+      <Field label={t('ddlColumnType')}><select name="columnType" required>{capabilities?.columnTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></Field>
+      <label className="check-field"><input name="nullable" type="checkbox" />{t('ddlNullable')}</label>
+    </>}
+    {indexAction && <Field label={t('ddlIndexName')}><input name="name" required /></Field>}
+    {action === 'create-index' && <>
+      <Field label={t('ddlIndexMethod')}><select name="method">{capabilities?.index.methods.map((method) => <option key={method}>{method}</option>)}</select></Field>
+      <Field label={t('ddlIndexColumn')}><input name="indexColumn" /></Field>
+      {capabilities?.index.expression && <Field label={t('ddlIndexExpression')}><input name="expression" /></Field>}
+      {capabilities?.index.partial && <Field label={t('ddlIndexPredicate')}><input name="predicate" /></Field>}
+      <label className="check-field"><input name="unique" type="checkbox" />{t('ddlUnique')}</label>
+    </>}
+    {constraintAction && <Field label={t('ddlConstraintName')}><input name="name" required /></Field>}
+    {constraintAction && <Field label={t('ddlConstraintType')}><select name="constraintKind" defaultValue="unique"><option value="unique">UNIQUE</option><option value="primary-key">PRIMARY KEY</option><option value="foreign-key">FOREIGN KEY</option>{capabilities?.constraint.check && <option value="check">CHECK</option>}</select></Field>}
+    {action === 'add-constraint' && <>
+      <Field label={t('ddlConstraintColumns')}><input name="constraintColumns" /></Field>
+      <Field label={t('ddlReferenceSchema')}><input name="referenceSchema" /></Field>
+      <Field label={t('ddlReferenceTable')}><input name="referenceTable" /></Field>
+      <Field label={t('ddlReferenceColumns')}><input name="referenceColumns" /></Field>
+      <Field label={t('ddlCheckExpression')}><input name="checkExpression" /></Field>
+    </>}
+    {action.startsWith('drop-') && action !== 'drop-database' && <label className="check-field"><input name="cascade" type="checkbox" />{t('ddlCascade')}</label>}
+  </>
+}
+
+function buildCoreDdlCommand(action: CoreDdlAction, data: FormData, capabilities?: DdlCapabilities): Record<string, unknown> {
+  const value = (name: string) => String(data.get(name) ?? '').trim()
+  const list = (name: string) => value(name).split(',').map((item) => item.trim()).filter(Boolean)
+  if (action.endsWith('-database')) {
+    if (action === 'rename-database') return { kind: action, from: value('from'), to: value('to') }
+    return { kind: action, name: value('name'), ...(action === 'drop-database' ? { confirmed: false } : {}) }
+  }
+  if (action.endsWith('-schema')) {
+    if (action === 'rename-schema') return { kind: action, from: value('from'), to: value('to') }
+    return { kind: action, name: value('name'), ...(action === 'drop-schema' ? { ...(data.has('cascade') ? { cascade: true } : {}), confirmed: false } : {}) }
+  }
+  const schema = value('schema')
+  if (action === 'create-table') return { kind: action, schema, name: value('name'), columns: [{ name: value('column'), type: { name: value('columnType') }, nullable: data.has('nullable') }] }
+  if (action === 'rename-table') return { kind: action, schema, from: value('from'), to: value('to') }
+  if (action === 'drop-table') return { kind: action, schema, name: value('name'), ...(data.has('cascade') ? { cascade: true } : {}), confirmed: false }
+  const table = value('table')
+  if (action === 'add-column') return { kind: action, schema, table, column: { name: value('name'), type: { name: value('columnType') }, nullable: data.has('nullable') } }
+  if (action === 'rename-column') return { kind: action, schema, table, from: value('from'), to: value('to'), ...(capabilities?.column.renameSyntax === 'change-column' ? { definition: { name: value('to'), type: { name: value('columnType') }, nullable: data.has('nullable') } } : {}) }
+  if (action === 'drop-column') return { kind: action, schema, table, name: value('name'), ...(data.has('cascade') ? { cascade: true } : {}), confirmed: false }
+  if (action === 'create-index') {
+    const expression = value('expression')
+    const predicate = value('predicate')
+    return { kind: action, schema, table, name: value('name'), method: value('method'), unique: data.has('unique'), parts: expression ? [{ expression }] : [{ column: value('indexColumn') }], ...(predicate ? { predicate } : {}), confirmed: false }
+  }
+  if (action === 'drop-index') return { kind: action, schema, table, name: value('name'), confirmed: false }
+  const constraintKind = value('constraintKind')
+  if (action === 'drop-constraint') return { kind: action, schema, table, name: value('name'), constraintKind, ...(data.has('cascade') ? { cascade: true } : {}), confirmed: false }
+  const columns = list('constraintColumns')
+  const constraint = constraintKind === 'foreign-key'
+    ? { kind: constraintKind, columns, referenceSchema: value('referenceSchema'), referenceTable: value('referenceTable'), referenceColumns: list('referenceColumns') }
+    : constraintKind === 'check'
+      ? { kind: constraintKind, expression: value('checkExpression') }
+      : { kind: constraintKind, columns }
+  return { kind: action, schema, table, name: value('name'), constraint, confirmed: false }
+}
+
+function requiresDdlConfirmation(command: Record<string, unknown>): boolean {
+  if (String(command.kind).startsWith('drop-')) return true
+  if (command.kind === 'create-index') return command.method !== 'btree' || Boolean(command.predicate) || 'expression' in ((command.parts as object[])[0] ?? {})
+  if (command.kind === 'add-constraint') return (command.constraint as { kind: string }).kind !== 'unique'
+  return false
+}
+
+function ddlActionSupported(action: CoreDdlAction, capabilities?: DdlCapabilities): boolean {
+  if (!capabilities) return false
+  const operation = action.split('-')[0] as 'create' | 'rename' | 'drop' | 'add'
+  const object = action.split('-')[1] as 'database' | 'schema' | 'table' | 'column' | 'index' | 'constraint'
+  if (object === 'database' || object === 'schema' || object === 'table') return operation === 'add' || capabilities[object][operation]
+  if (object === 'column') return operation !== 'rename' || capabilities.column.rename
+  return true
+}
+
+function ddlActionLabel(action: CoreDdlAction) {
+  const labels = {
+    'create-database': 'ddlCreateDatabase', 'rename-database': 'ddlRenameDatabase', 'drop-database': 'ddlDropDatabase',
+    'create-schema': 'ddlCreateSchema', 'rename-schema': 'ddlRenameSchema', 'drop-schema': 'ddlDropSchema',
+    'create-table': 'ddlCreateTable', 'rename-table': 'ddlRenameTable', 'drop-table': 'ddlDropTable',
+    'add-column': 'ddlAddColumn', 'rename-column': 'ddlRenameColumn', 'drop-column': 'ddlDropColumn',
+    'create-index': 'ddlCreateIndex', 'drop-index': 'ddlDropIndex', 'add-constraint': 'ddlAddConstraint', 'drop-constraint': 'ddlDropConstraint',
+  } as const
+  return labels[action]
 }
 
 function DataBrowser({ connectionId, locale, csrfToken, isAdmin }: { connectionId: string; locale: Locale; csrfToken: string; isAdmin: boolean }) {
