@@ -43,6 +43,11 @@ export interface TransferPreviewPlanWriter {
   save(jobId: string, fingerprint: TransferPreviewFingerprint, plan: unknown): Promise<void>
 }
 
+export type TransferPreviewPlanRevalidator = (
+  plan: unknown,
+  storedFingerprint: TransferPreviewFingerprint,
+) => Promise<TransferPreviewFingerprint>
+
 export class EncryptedTransferPreviewPlanStore implements TransferPreviewPlanWriter {
   constructor(
     private readonly repository: TransferPreviewPlanRepository,
@@ -68,7 +73,11 @@ export class EncryptedTransferPreviewPlanStore implements TransferPreviewPlanWri
     })
   }
 
-  async validate(jobId: string, token: string): Promise<unknown> {
+  async validate(
+    jobId: string,
+    token: string,
+    revalidate?: TransferPreviewPlanRevalidator,
+  ): Promise<unknown> {
     const stored = await this.repository.find(jobId)
     if (!stored) throw new TransferPreviewPlanError('PREVIEW_NOT_FOUND')
     if (this.now().getTime() > Date.parse(stored.expiresAt)) {
@@ -83,6 +92,13 @@ export class EncryptedTransferPreviewPlanStore implements TransferPreviewPlanWri
         throw new TransferPreviewPlanError('INVALID_PREVIEW_PLAN')
       }
       this.tokens.verify(token, payload.fingerprint)
+      if (revalidate) {
+        const currentFingerprint = await revalidate(
+          structuredClone(payload.plan),
+          structuredClone(payload.fingerprint),
+        )
+        this.tokens.verify(token, currentFingerprint)
+      }
       return structuredClone(payload.plan)
     } catch (error) {
       if (error instanceof TransferPreviewPlanError) throw error

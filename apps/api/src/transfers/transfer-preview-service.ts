@@ -28,7 +28,11 @@ export interface TransferPreviewInspection {
 }
 
 export interface TransferPreviewInspector {
-  inspect(job: StoredTransferJob, request: TransferPreviewRequest): Promise<TransferPreviewInspection>
+  inspect(
+    actor: Pick<AuthUser, 'id' | 'role'>,
+    job: StoredTransferJob,
+    request: TransferPreviewRequest,
+  ): Promise<TransferPreviewInspection>
 }
 
 export type TransferPreviewServiceErrorCode = 'UPLOAD_INCOMPLETE' | 'INVALID_PREVIEW'
@@ -64,7 +68,7 @@ export class TransferPreviewService {
     }
     if (job.status !== 'queued') throw new TransferPreviewError('INVALID_PREVIEW')
 
-    const inspection = await this.inspector.inspect(job, request)
+    const inspection = await this.inspector.inspect(actor, job, request)
     this.validateInspection(job, inspection)
     const token = this.tokens.issue(inspection.fingerprint)
     await this.plans.save(jobId, inspection.fingerprint, inspection.plan)

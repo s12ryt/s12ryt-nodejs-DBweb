@@ -59,7 +59,7 @@ describe('TransferPreviewService', () => {
       target: { schema: 'public', table: 'orders' },
     })
 
-    expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ id: job.id }), {
+    expect(inspect).toHaveBeenCalledWith(actor, expect.objectContaining({ id: job.id }), {
       mapping: { amount: 'total' },
       strategy: { conflict: 'skip' },
       target: { schema: 'public', table: 'orders' },
