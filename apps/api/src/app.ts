@@ -69,6 +69,10 @@ import {
   type TransferExecutionHandler,
 } from './transfers/transfer-handler-router.js'
 import {
+  TransferExecutionQueueError,
+  type TransferExecutionQueue,
+} from './transfers/transfer-execution-queue.js'
+import {
   TransferJobError,
   type TransferJobService,
 } from './transfers/transfer-job.js'
@@ -81,6 +85,7 @@ import {
   type TransferPreviewRequest,
   type TransferPreviewService,
 } from './transfers/transfer-preview-service.js'
+import type { HealthService } from './ha/health-service.js'
 
 interface BuildAppOptions {
   authService: AuthService
@@ -99,6 +104,8 @@ interface BuildAppOptions {
   transferPreviewService?: TransferPreviewService
   friendlyCsvExportService?: FriendlyCsvExportService
   transferExecutionService?: TransferExecutionHandler
+  transferExecutionQueue?: Pick<TransferExecutionQueue, 'request'>
+  healthService?: HealthService
   csrfSecret: Buffer
   production: boolean
   staticRoot?: string
@@ -205,6 +212,8 @@ const messages = {
     IMPORT_FAILED: 'Transfer import failed',
     TRANSFER_CONFIRMATION_REQUIRED: 'Transfer operation requires confirmation',
     UNSUPPORTED_TRANSFER_HANDLER: 'This transfer format and direction are not supported',
+    EXECUTION_ALREADY_REQUESTED: 'Transfer execution has already been requested',
+    INVALID_EXECUTION_REQUEST: 'Transfer execution request is invalid',
     INVALID_RESTORE_JOB: 'Transfer job cannot run this SQL restore',
     RESTORE_CANCELLED: 'SQL restore was cancelled',
     RESTORE_CHANGED: 'SQL restore preview is stale and must be regenerated',
@@ -297,6 +306,8 @@ const messages = {
     IMPORT_FAILED: '傳輸匯入失敗',
     TRANSFER_CONFIRMATION_REQUIRED: '傳輸操作需要確認',
     UNSUPPORTED_TRANSFER_HANDLER: '不支援此傳輸格式與方向',
+    EXECUTION_ALREADY_REQUESTED: '已要求執行此傳輸工作',
+    INVALID_EXECUTION_REQUEST: '傳輸執行要求無效',
     INVALID_RESTORE_JOB: '此傳輸工作無法執行 SQL 還原',
     RESTORE_CANCELLED: 'SQL 還原已取消',
     RESTORE_CHANGED: 'SQL 還原預覽已失效，請重新產生',
@@ -416,6 +427,9 @@ function handleTransferError(
       return sendError(request, reply, 409, error.code)
     }
     return sendError(request, reply, 422, error.code)
+  }
+  if (error instanceof TransferExecutionQueueError) {
+    return sendError(request, reply, 409, error.code)
   }
   if (error instanceof TransferChunkError) {
     if (error.code === 'CHUNK_NOT_FOUND') return sendError(request, reply, 404, error.code)
@@ -609,7 +623,26 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return true
   }
 
-  app.get('/api/health', async () => ({ status: 'ok' }))
+  app.get('/api/health/live', async () => ({ status: 'live' }))
+  if (options.healthService) {
+    app.get('/api/health/ready', async (_request, reply) => {
+      const health = await options.healthService!.check()
+      return reply.code(health.ready ? 200 : 503).send({
+        status: health.ready ? 'ready' : 'not-ready',
+        degraded: health.degraded,
+      })
+    })
+    app.get('/api/health', async () => {
+      const health = await options.healthService!.check()
+      return {
+        status: health.ready ? health.degraded ? 'degraded' : 'ok' : 'not-ready',
+        components: health.components,
+      }
+    })
+  } else {
+    app.get('/api/health/ready', async () => ({ status: 'ready', degraded: false }))
+    app.get('/api/health', async () => ({ status: 'ok' }))
+  }
 
   if (options.transferJobService && options.transferUploadService) {
     const jobs = options.transferJobService
@@ -835,7 +868,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
 
     const transferExecutions = options.transferExecutionService ?? options.friendlyCsvExportService
-    if (transferExecutions) {
+    if (options.transferExecutionQueue || transferExecutions) {
       app.post<{ Params: { jobId: string }; Body: { previewToken: string } }>(
         '/api/transfers/:jobId/execute',
         {
@@ -851,6 +884,15 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           const actor = await authenticate(request, reply)
           if (!actor || !validateCsrf(request, reply)) return
           try {
+            if (options.transferExecutionQueue) {
+              const requested = await options.transferExecutionQueue.request(
+                actor,
+                request.params.jobId,
+                request.body.previewToken,
+              )
+              return reply.code(202).send(requested)
+            }
+            if (!transferExecutions) throw new TransferHandlerRouterError('UNSUPPORTED_TRANSFER_HANDLER')
             return await transferExecutions.execute(actor, request.params.jobId, request.body.previewToken)
           } catch (error) {
             return handleTransferError(request, reply, error)

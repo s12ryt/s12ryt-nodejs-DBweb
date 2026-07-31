@@ -44,7 +44,7 @@ describe('transfer HTTP API', () => {
     ))
   })
 
-  async function setup() {
+  async function setup(queuedExecution = false) {
     const authService = new AuthService(new MemoryAuthRepository(), {
       idleTimeoutMs: 30 * 60_000,
       absoluteTimeoutMs: 12 * 60 * 60_000,
@@ -109,6 +109,15 @@ describe('transfer HTTP API', () => {
       checksum: sha256(Buffer.from('csv-output')),
       chunks: [{ index: 0, size: 64, checksum: sha256(Buffer.from('csv-output')) }],
     }))
+    const requestExecution = vi.fn(async (actor, jobId: string) => jobs.update(
+      actor,
+      jobId,
+      (job) => ({
+        ...job,
+        executionRequestedAt: '2026-08-01T00:00:00.000Z',
+        executionRequestedBy: actor.id,
+      }),
+    ))
     const cancelExport = vi.fn((actor, jobId: string) => jobs.cancel(actor, jobId))
     const executionHandler = {
       inspect: vi.fn(async () => ({
@@ -132,6 +141,7 @@ describe('transfer HTTP API', () => {
       transferDownloadService: downloads,
       transferPreviewService: { preview } as unknown as TransferPreviewService,
       transferExecutionService,
+      ...(queuedExecution ? { transferExecutionQueue: { request: requestExecution } } : {}),
       csrfSecret: Buffer.alloc(32, 5),
       production: false,
     })
@@ -156,6 +166,7 @@ describe('transfer HTTP API', () => {
       output,
       preview,
       execute,
+      requestExecution,
     }
   }
 
@@ -347,7 +358,41 @@ describe('transfer HTTP API', () => {
       expect.objectContaining({ id: environment.operatorUser.id }),
       jobId,
       'v1.preview-token.signature',
+      undefined,
     )
+  })
+
+  it('HA runtime只將明確執行請求寫入PG佇列並回202，不綁住HTTP直接執行', async () => {
+    const environment = await setup(true)
+    await environment.access.assign(
+      environment.adminUser,
+      environment.operatorUser.id,
+      'connection-1',
+      ['data-read'],
+    )
+    const headers = {
+      cookie: environment.operator.cookie,
+      'x-csrf-token': environment.operator.csrf,
+    }
+    const created = await environment.jobs.create(environment.operatorUser, {
+      connectionId: 'connection-1', direction: 'export', format: 'json',
+    })
+    await environment.jobs.update(environment.operatorUser, created.id, (job) =>
+      transitionTransferJob(job, 'previewed', { updatedAt: job.updatedAt }))
+
+    const response = await environment.app.inject({
+      method: 'POST', url: `/api/transfers/${created.id}/execute`, headers,
+      payload: { previewToken: 'v1.preview-token.signature' },
+    })
+
+    expect(response.statusCode).toBe(202)
+    expect(response.json()).toMatchObject({ executionRequestedBy: environment.operatorUser.id })
+    expect(environment.requestExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ id: environment.operatorUser.id }),
+      created.id,
+      'v1.preview-token.signature',
+    )
+    expect(environment.execute).not.toHaveBeenCalled()
   })
 
   it('拒絕尚未支援的傳輸方向與格式，不fallback至其他handler', async () => {
