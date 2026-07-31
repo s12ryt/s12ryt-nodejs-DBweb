@@ -21,3 +21,9 @@
 - 將 SSH forwarding socket 注入 PG/MySQL 連線測試、唯讀瀏覽、SQL query 與 keepalive 共用 gateway；runtime 關閉時依序停止 scheduler、關閉 tunnel pool、銷毀 metadata。
 - 完成雙語 SSH 連線 UI 與 TOFU reset 二次確認；公開畫面/API 不回傳 SSH 密碼，DB host 保持由 SSH 主機端解析。
 - M2 最終驗證：Vitest 29 files/97 tests、ESLint、全 workspace typecheck、production build 全通過；Playwright Chromium/Firefox/WebKit 核心流程通過。首次並行品質命令造成 Argon2 測試資源逾時與 Playwright目錄競爭，序列重跑均通過。
+- 建立公開 GitHub repository `s12ryt/s12ryt-nodejs-DBweb`，以 42 個原子提交推送 M1/M2；GitHub Actions quality、browser、container jobs 全綠。container 初次因 `better-sqlite3` 缺原生編譯工具失敗，加入 Python/make/g++ 到 Docker build stage 後通過。
+- 依 RED -> GREEN 完成 M3A tagged value、穩定 PK/非空 unique identity、generated/unknown readonly、最多 100 列的單交易新增/更新/刪除/共同 patch，以及原始值樂觀鎖與衝突列索引。
+- 完成 PostgreSQL 9.6 相容 pg_catalog mutation gateway與 MySQL 5.6 information_schema gateway；所有值參數化，交易失敗 rollback，SSH socket沿用共用 provider並確實釋放。
+- 完成管理員限定 mutation capability/execute HTTP API、90 天 AES-GCM 加密 SQL template 稽核與 runtime wiring；異動稽核不保存 row before/after 或參數值。
+- 完成雙語資料新增、單列更新、刪除二次確認、最多 100 列選取與共同 patch UI；前端測試 10/10、M3A 鄰近後端測試 31 通過且 2 個無環境 integration cases明確略過，lint/typecheck均通過。
+- 新增 PostgreSQL 9.6/17 與 MySQL 5.6/8.4 GitHub Actions mutation integration矩陣；YAML已解析，本機無對應資料庫服務時測試明確略過，遠端結果待push後確認。
