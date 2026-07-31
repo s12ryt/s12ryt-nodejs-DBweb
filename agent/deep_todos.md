@@ -42,3 +42,7 @@
 - 2026-07-31：M3B 前端完成管理員結構工作台與 16 項核心 DDL 命令，依 live capabilities 顯示/停用功能；本機最終驗證為 45 個 Vitest 檔通過、2 個整合檔略過，157 tests 通過、4 個真實 DB cases 略過，lint、typecheck、build 與三瀏覽器核心 E2E 全綠。
 - 2026-07-31：M3B 首次遠端矩陣 run `30599472205` 在 MySQL 5.6/8.4 精準捕捉 `AUTO_INCREMENT` 欄位未同時建立索引或主鍵的合法性缺陷；先以 builder 測試建立 RED，再要求 MySQL identity 欄位必須納入 create-table primary key。
 - 2026-07-31：M3B GitHub Actions run `30599742558` 全綠；PostgreSQL 9.6/17、MySQL 5.6/8.4 真實 mutation 與 DDL、quality、Docker image 及三瀏覽器均通過。M3B 完成並直接進入 M3C。
+- 2026-07-31：M3C 完成版本化進階物件 capability 與方言 builder；涵蓋 PostgreSQL view/materialized view/sequence/enum/domain/function/procedure/trigger/partition/extension，以及 MySQL view/function/procedure/trigger/event/partition。原文 query/body 需管理員確認並沿用 AES-GCM SQL template 稽核。
+- 2026-07-31：M3C 前端結構工作台擴為 36 項核心與進階 DDL 操作，依真實版本停用不支援項目；PostgreSQL 9.6 procedure 與 partition 邊界已有 UI 回歸測試。
+- 2026-07-31：M3C 本機驗證為 47 個 Vitest 檔通過、2 個整合檔略過，173 tests 通過、6 個無本機 DB 的 cases 略過；lint、typecheck、production build 與三瀏覽器核心 E2E 全綠。四版本進階物件矩陣待 GitHub Actions 實跑。
+- 2026-07-31：Vitest worker 上限設為 2，避免多個正式 Argon2 HTTP 測試同時執行造成資源競爭逾時；未降低密碼雜湊參數或測試斷言。

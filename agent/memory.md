@@ -36,3 +36,9 @@
 - M3B 推送前本機驗證：Vitest 45 files通過、2 files略過，157 tests通過、4個無本機DB環境的integration cases略過；ESLint、workspace strict typecheck、production build及Chromium/Firefox/WebKit核心E2E全綠。
 - M3B 首次 GitHub Actions run `30599472205` 在 MySQL 5.6/8.4 真實建立資料表時失敗；原因是 builder 允許 `AUTO_INCREMENT` 欄位未包含於索引。新增 RED 測試後，create-table 支援結構化 primary key，且 MySQL identity 欄位未納入主鍵時拒絕命令。
 - 修復後 GitHub Actions run `30599742558` 全綠：PostgreSQL 9.6/17、MySQL 5.6/8.4 真實 mutation/DDL、quality、Docker image、Chromium/Firefox/WebKit均通過；M3B驗收完成並進入M3C。
+- 依 RED -> GREEN 完成 M3C 版本化進階物件 capability 與 builder：PostgreSQL view/materialized view/sequence/enum/domain/function/procedure/trigger/partition/extension，以及 MySQL view/function/procedure/trigger/event/partition。
+- 程式碼型物件 query/body 允許管理員方言原文與必要分號，但限制長度並拒絕 NUL；所有高風險進階命令需二次確認，完整 SQL template 只以 AES-GCM 密文保存，SQLite 檔案無原文明文。
+- 完成雙語進階 DDL UI，結構工作台共 36 項命令並依 live capability 停用不支援項目；前端 App tests 13/13 通過。
+- 擴充四版本 DDL integration，加入進階 view/routine/trigger/event/partition 與方言專屬物件生命週期；本機無 DB 時 4 個 DDL integration cases 明確略過，待 GitHub Actions 真實執行。
+- M3C 推送前本機驗證：Vitest 47 files通過、2 files略過，173 tests通過、6 cases略過；ESLint、workspace strict typecheck、production build及Chromium/Firefox/WebKit核心E2E全綠。
+- 將 Vitest `maxWorkers` 設為2，修復多個正式Argon2 HTTP測試平行競爭造成的5秒逾時；單檔與限制worker後完整測試均通過，產品Argon2設定未變。
