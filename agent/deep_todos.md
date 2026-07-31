@@ -76,3 +76,7 @@
 - 2026-07-31：M5B 第一階段完成精確 tagged JSON/CSV 串流格式、友善 CSV 與公式注入防護、結構化 AND-only filter、欄位映射、衝突/交易/續傳策略及受限 ustar/gzip 封裝；所有來源值與 filter 均維持型別驗證及參數化邊界。
 - 2026-07-31：完成 PostgreSQL repeatable read-only cursor 與 MySQL consistent read-only snapshot 串流 gateway、固定分段 output writer及友善 CSV export orchestration；中途取消、提早停止、driver/audit失敗皆清除partial output並安全關閉交易與SSH channel。
 - 2026-07-31：preview inspector產生的不可變執行plan以job綁定AES-GCM保存30分鐘，token與source/mapping/strategy/target/capability/schema fingerprint共同驗證；公開preview回應只含token、估算與遮蔽issues。M5B基礎 targeted為13 files/47 tests，完整回歸為84 files、342 tests通過；實際CSV/JSON executor、import與四版本roundtrip仍在進行。
+- 2026-07-31：M5B 完成 friendly CSV preview/execute/cancel 的 HTTP/runtime/UI 整合，以及精確 JSON 多表一致性快照匯出、加密 staging tar/gzip package、server-derived preview、串流 package reader與匯入 orchestration。
+- 2026-07-31：精確 JSON 匯入已完成 PostgreSQL/MySQL 方言 gateway；atomic 失敗全數 rollback，batch 只保留已提交進度，skip/update/replace、generated identity與 PostgreSQL sequence同步皆由測試保護。preview會重驗來源manifest、target schema、能力與checksum。
+- 2026-07-31：transfer handler依伺服器端job direction/format分派friendly CSV export、exact JSON export/import；不支援組合不會fallback，但仍可取消以釋放active配額。source/output/json-stage使用不同AAD namespace並納入retention cleanup。
+- 2026-07-31：本切片完整本機驗證為95個Vitest檔通過、3個integration檔略過，377 tests通過、10個無本機DB cases略過；lint、strict typecheck、production build及Playwright 7 passed/2 responsive skipped全綠。精確CSV executor與四版本roundtrip仍待完成。

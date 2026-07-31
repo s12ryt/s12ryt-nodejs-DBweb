@@ -75,3 +75,8 @@
 - 新增`pg-cursor`與固定型別，完成PostgreSQL repeatable read-only cursor及MySQL consistent read-only query stream；提早停止、取消與driver failure會rollback/close/end並釋放SSH socket，資料逐列轉tagged values。
 - 完成固定分段output writer與友善CSV export service；output、audit、job狀態任一步失敗均刪除partial artifact並回安全錯誤。preview plan另以AES-GCM綁定job保存30分鐘，執行token不接受client自行聲稱fingerprint，公開結果不回傳plan。
 - M5B基礎 targeted驗證為13 files/47 tests；當時完整本機回歸為84 files、342 tests通過，lint、strict typecheck及production build全綠。CSV/JSON實際preview/executor、import批次/續傳與四版本roundtrip尚未完成。
+- 完成friendly CSV受信任preview coordinator、HTTP preview/execute與雙語Web設定流程；執行期間cancel會abort串流、等待partial output清理後再回應。
+- 完成精確JSON多表匯出與匯入：同一PG/MySQL唯讀快照串流多表，先寫用途隔離的加密staging再組tar/gzip；package reader保留handler domain錯誤，manifest及schema drift在執行前拒絕。
+- 完成PG/MySQL精確JSON import gateway與SQL builder：所有值參數化，skip/update/replace、DEFAULT、generated identity、PG sequence同步、atomic rollback與batch partial progress都有RED/GREEN證據。
+- 完成server-side transfer handler router與runtime組裝，preview、execute、cancel只依metadata job方向/格式分派；unsupported execute回安全422且不fallback，unsupported queued job仍能取消釋放配額。
+- 本切片完整本機回歸：Vitest 95 files通過、3 integration files略過，377 tests通過、10 cases略過；ESLint、workspace strict typecheck、production build全綠；Playwright 7 passed、2 responsive cases依設定略過。精確CSV executor及四版本roundtrip仍在M5B待辦。
