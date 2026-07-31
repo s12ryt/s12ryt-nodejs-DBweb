@@ -135,3 +135,4 @@ jobs:
           DBWEB_INTEGRATION_DATABASE: dbweb
           DBWEB_INTEGRATION_USERNAME: dbweb
           DBWEB_INTEGRATION_PASSWORD: dbweb-test-password
+          DBWEB_INTEGRATION_ADMIN_PASSWORD: dbweb-root-password

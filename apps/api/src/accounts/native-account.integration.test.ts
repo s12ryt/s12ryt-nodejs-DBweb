@@ -12,6 +12,7 @@ const port = Number(process.env.DBWEB_INTEGRATION_PORT ?? (engine === 'mysql' ? 
 const database = process.env.DBWEB_INTEGRATION_DATABASE ?? 'dbweb'
 const username = process.env.DBWEB_INTEGRATION_USERNAME ?? 'dbweb'
 const password = process.env.DBWEB_INTEGRATION_PASSWORD ?? 'dbweb-test-password'
+const adminPassword = process.env.DBWEB_INTEGRATION_ADMIN_PASSWORD
 
 const connection: ResolvedConnection = {
   id: 'native-account-integration',
@@ -75,7 +76,7 @@ describe.runIf(engine === 'mysql')('MySQL native account integration', () => {
   const rotatedPassword = 'dbweb-native-rotated-password'
 
   it('creates, rotates, disables, enables, verifies, and deletes a restricted account', async () => {
-    await mysqlQuery("DROP USER IF EXISTS 'dbweb_native_test'@'%'")
+    await dropMysqlTestAccount()
     try {
       await gateway.createAccount(connection, {
         identity,
@@ -83,7 +84,7 @@ describe.runIf(engine === 'mysql')('MySQL native account integration', () => {
         canLogin: true,
         connectionLimit: 2,
       })
-      await mysqlQuery(`GRANT SELECT ON \`${database.replaceAll('`', '``')}\`.* TO 'dbweb_native_test'@'%'`)
+      await mysqlAdminQuery(`GRANT SELECT ON \`${database.replaceAll('`', '``')}\`.* TO 'dbweb_native_test'@'%'`)
       expect(await gateway.listAccounts(connection)).toEqual(expect.arrayContaining([
         expect.objectContaining({ identity, canLogin: true, connectionLimit: 2, systemAccount: false }),
       ]))
@@ -107,7 +108,7 @@ describe.runIf(engine === 'mysql')('MySQL native account integration', () => {
         account.identity.host === identity.host,
       )).toBe(false)
     } finally {
-      await mysqlQuery("DROP USER IF EXISTS 'dbweb_native_test'@'%'")
+      await dropMysqlTestAccount()
     }
   }, 30_000)
 })
@@ -119,8 +120,20 @@ async function postgresQuery(sql: string): Promise<void> {
   finally { await client.end() }
 }
 
-async function mysqlQuery(sql: string): Promise<void> {
-  const client = await mysql.createConnection({ host, port, database, user: username, password })
-  try { await client.query(sql) }
-  finally { await client.end() }
+async function mysqlAdminQuery(sql: string): Promise<Array<Record<string, unknown>>> {
+  if (!adminPassword) throw new Error('DBWEB_INTEGRATION_ADMIN_PASSWORD is required')
+  const client = await mysql.createConnection({ host, port, user: 'root', password: adminPassword })
+  try {
+    const [rows] = await client.query(sql)
+    return Array.isArray(rows) ? rows as Array<Record<string, unknown>> : []
+  } finally { await client.end() }
+}
+
+async function dropMysqlTestAccount(): Promise<void> {
+  const rows = await mysqlAdminQuery(
+    "SELECT COUNT(*) AS dbweb_count FROM mysql.user WHERE User = 'dbweb_native_test' AND Host = '%'",
+  )
+  if (Number(rows[0]?.dbweb_count) > 0) {
+    await mysqlAdminQuery("DROP USER 'dbweb_native_test'@'%'")
+  }
 }
