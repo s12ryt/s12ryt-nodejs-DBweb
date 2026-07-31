@@ -22,7 +22,10 @@ const table: MutationTable = {
   uniqueKeys: [{ name: 'orders_pkey', kind: 'primary', columns: ['id'] }],
 }
 
-async function setup(tableMetadata: MutationTable = table) {
+async function setup(
+  tableMetadata: MutationTable = table,
+  authorize?: (actor: { id: string; role: 'admin' | 'user' }, connectionId: string) => Promise<boolean>,
+) {
   const connector = { test: vi.fn(async () => ({ latencyMs: 1, serverVersion: '16' })) }
   const connections = new ConnectionService(
     new MemoryConnectionRepository(),
@@ -55,7 +58,13 @@ async function setup(tableMetadata: MutationTable = table) {
   }
   const audit: MutationAuditRecorder = { record: vi.fn(async () => undefined) }
   return {
-    service: new DataMutationService(connections, { postgres: gateway, mysql: gateway }, audit),
+    service: new DataMutationService(
+      connections,
+      { postgres: gateway, mysql: gateway },
+      audit,
+      undefined,
+      authorize,
+    ),
     gateway,
     audit,
     profile,
@@ -96,6 +105,27 @@ describe('DataMutationService', () => {
       ),
     ).rejects.toEqual(new DataMutationError('FORBIDDEN'))
     expect(gateway.describeTable).not.toHaveBeenCalled()
+  })
+
+  it('注入的即時授權允許具data-write能力的一般使用者', async () => {
+    const authorize = vi.fn(async () => true)
+    const { service, gateway, profile } = await setup(table, authorize)
+
+    await service.mutate({ id: 'writer-1', role: 'user' }, {
+      connectionId: profile.id,
+      schema: 'public',
+      table: 'orders',
+      operations: [{
+        kind: 'insert',
+        values: { status: { kind: 'value', type: 'string', value: 'new' } },
+      }],
+    })
+
+    expect(authorize).toHaveBeenCalledWith(
+      { id: 'writer-1', role: 'user' },
+      profile.id,
+    )
+    expect(gateway.executeTransaction).toHaveBeenCalledOnce()
   })
 
   it('將最多 100 筆新增、個別更新與共用 patch 在一次交易中執行', async () => {

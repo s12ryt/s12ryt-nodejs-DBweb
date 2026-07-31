@@ -86,6 +86,11 @@ export interface MutationAuditRecorder {
   record(entry: MutationAuditEntry): Promise<void>
 }
 
+export type DataMutationAuthorizer = (
+  actor: { id: string; role: 'admin' | 'user' },
+  connectionId: string,
+) => Promise<boolean>
+
 export type DataMutationErrorCode =
   | 'CONFIRMATION_REQUIRED'
   | 'FORBIDDEN'
@@ -111,13 +116,16 @@ export class DataMutationService {
     private readonly gateways: Record<DatabaseEngine, DataMutationGateway>,
     private readonly audit: MutationAuditRecorder,
     private readonly now: () => Date = () => new Date(),
+    private readonly authorize: DataMutationAuthorizer = async (actor) => actor.role === 'admin',
   ) {}
 
   async inspect(
     actor: { id: string; role: 'admin' | 'user' },
     input: { connectionId: string; schema: string; table: string },
   ): Promise<DataMutationInspection> {
-    if (actor.role !== 'admin') throw new DataMutationError('FORBIDDEN')
+    if (!(await this.authorize(actor, input.connectionId))) {
+      throw new DataMutationError('FORBIDDEN')
+    }
     if (!input.connectionId.trim() || !input.schema.trim() || !input.table.trim()) {
       throw new DataMutationError('INVALID_MUTATION')
     }
@@ -144,7 +152,9 @@ export class DataMutationService {
     actor: { id: string; role: 'admin' | 'user' },
     input: DataMutationRequest & { connectionId: string },
   ): Promise<DataMutationResult> {
-    if (actor.role !== 'admin') throw new DataMutationError('FORBIDDEN')
+    if (!(await this.authorize(actor, input.connectionId))) {
+      throw new DataMutationError('FORBIDDEN')
+    }
     if (!input.connectionId.trim() || !input.schema.trim() || !input.table.trim()) {
       throw new DataMutationError('INVALID_MUTATION')
     }
