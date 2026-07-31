@@ -5,6 +5,16 @@ export interface User {
   id: string
   username: string
   role: UserRole
+  enabled: boolean
+  passwordChangeRequired: boolean
+}
+
+export type WebCapability = 'structure-read' | 'data-read' | 'query-read' | 'data-write' | 'ddl-write' | 'account-manage'
+
+export interface WebAccessAssignment {
+  userId: string
+  connectionId: string
+  capabilities: WebCapability[]
 }
 
 export interface Session {
@@ -126,7 +136,7 @@ export class ApiError extends Error {
 export async function apiRequest<T>(
   path: string,
   options: {
-    method?: 'GET' | 'POST'
+    method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
     body?: unknown
     csrfToken?: string
     locale: Locale
