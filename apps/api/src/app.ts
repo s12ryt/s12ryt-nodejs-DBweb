@@ -10,6 +10,12 @@ import { type WebCapability, type WebAccessService } from './access/web-access-s
 import { NativeAccountCredentialError } from './accounts/native-account-credential.js'
 import { NativeAccountGatewayError } from './accounts/native-account-gateway-error.js'
 import { NativeAccountPolicyError } from './accounts/native-account-policy.js'
+import { NativeGrantGatewayError } from './accounts/native-grant-gateway.js'
+import {
+  NativeGrantValidationError,
+  type NativeGrantCommand,
+} from './accounts/native-grant-plan.js'
+import { NativeGrantServiceError, type NativeGrantService } from './accounts/native-grant-service.js'
 import {
   NativeAccountServiceError,
   type CreatedNativeAccount,
@@ -46,6 +52,7 @@ interface BuildAppOptions {
   sshKnownHostService?: SshKnownHostService
   webAccessService?: WebAccessService
   nativeAccountService?: NativeAccountService
+  nativeGrantService?: NativeGrantService
   csrfSecret: Buffer
   production: boolean
   staticRoot?: string
@@ -102,6 +109,11 @@ const messages = {
     READ_ONLY_QUERY_REQUIRED: 'Only a single read-only SQL statement is allowed',
     MUTATION_FAILED: 'Data mutation failed',
     NATIVE_ACCOUNT_FAILED: 'Native database account operation failed',
+    NATIVE_GRANT_FAILED: 'Native database grant operation failed',
+    NATIVE_GRANT_CONFIRMATION_REQUIRED: 'Native database grant revocation requires confirmation',
+    INVALID_NATIVE_GRANT: 'Invalid native database grant',
+    SYSTEM_DATABASE_PROTECTED: 'This system database is protected',
+    UNSUPPORTED_NATIVE_PRIVILEGE: 'This privilege is not supported for the selected scope',
     ACCOUNT_NOT_FOUND: 'Native database account not found',
     PROTECTED_ACCOUNT: 'This database account is protected',
     REAUTHENTICATION_FAILED: 'Password verification failed',
@@ -152,6 +164,11 @@ const messages = {
     READ_ONLY_QUERY_REQUIRED: '只允許單一唯讀 SQL 語句',
     MUTATION_FAILED: '資料異動失敗',
     NATIVE_ACCOUNT_FAILED: '原生資料庫帳號操作失敗',
+    NATIVE_GRANT_FAILED: '原生資料庫權限異動失敗',
+    NATIVE_GRANT_CONFIRMATION_REQUIRED: '撤銷原生資料庫權限需要二次確認',
+    INVALID_NATIVE_GRANT: '原生資料庫權限設定無效',
+    SYSTEM_DATABASE_PROTECTED: '此系統資料庫受保護',
+    UNSUPPORTED_NATIVE_PRIVILEGE: '所選範圍不支援此權限',
     ACCOUNT_NOT_FOUND: '找不到原生資料庫帳號',
     PROTECTED_ACCOUNT: '此資料庫帳號受保護',
     REAUTHENTICATION_FAILED: '密碼驗證失敗',
@@ -232,6 +249,39 @@ function handleNativeAccountError(
     return sendError(request, reply, 422, 'INVALID_NATIVE_ACCOUNT')
   }
   throw error
+}
+
+function handleNativeGrantError(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  error: unknown,
+) {
+  if (error instanceof NativeGrantGatewayError) {
+    return reply.code(502).send({
+      error: {
+        code: 'NATIVE_GRANT_FAILED',
+        message: messages[localeOf(request)].NATIVE_GRANT_FAILED,
+        appliedCount: error.appliedCount,
+        failedIndex: error.failedIndex,
+      },
+    })
+  }
+  if (error instanceof NativeGrantValidationError) {
+    const status = error.code === 'NATIVE_GRANT_CONFIRMATION_REQUIRED' ? 409 : 422
+    return sendError(request, reply, status, error.code)
+  }
+  if (!(error instanceof NativeGrantServiceError)) throw error
+  if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+  if (error.code === 'ACCOUNT_NOT_FOUND') return sendError(request, reply, 404, 'ACCOUNT_NOT_FOUND')
+  if (error.code === 'PROTECTED_ACCOUNT') return sendError(request, reply, 409, 'PROTECTED_ACCOUNT')
+  return reply.code(502).send({
+    error: {
+      code: 'NATIVE_GRANT_FAILED',
+      message: messages[localeOf(request)].NATIVE_GRANT_FAILED,
+      ...(error.appliedCount === undefined ? {} : { appliedCount: error.appliedCount }),
+      ...(error.failedIndex === undefined ? {} : { failedIndex: error.failedIndex }),
+    },
+  })
 }
 
 function publicManagedAccount(account: StoredNativeAccount) {
@@ -971,6 +1021,122 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           return reply.code(204).send()
         } catch (error) {
           return handleNativeAccountError(request, reply, error)
+        }
+      },
+    )
+  }
+
+  if (options.nativeGrantService) {
+    const nativeGrants = options.nativeGrantService
+    const paramsSchema = {
+      type: 'object', additionalProperties: false, required: ['connectionId'],
+      properties: { connectionId: { type: 'string', minLength: 1, maxLength: 128 } },
+    } as const
+    const identitySchema = {
+      type: 'object', additionalProperties: false, required: ['engine', 'username'],
+      properties: {
+        engine: { type: 'string', enum: ['postgres', 'mysql'] },
+        username: { type: 'string', minLength: 1, maxLength: 128 },
+        host: { type: 'string', minLength: 1, maxLength: 255 },
+      },
+    } as const
+    const changeSchema = {
+      type: 'object', additionalProperties: false, required: ['scope', 'database', 'privileges'],
+      properties: {
+        scope: { type: 'string', enum: ['database', 'schema', 'table'] },
+        database: { type: 'string', minLength: 1, maxLength: 128 },
+        schema: { type: 'string', minLength: 1, maxLength: 128 },
+        table: { type: 'string', minLength: 1, maxLength: 128 },
+        privileges: {
+          type: 'array', minItems: 1, maxItems: 11, uniqueItems: true,
+          items: {
+            type: 'string',
+            enum: ['connect', 'usage', 'select', 'insert', 'update', 'delete', 'create', 'alter', 'drop', 'index', 'references'],
+          },
+        },
+      },
+    } as const
+
+    async function requireGrantAccess(
+      request: FastifyRequest,
+      reply: FastifyReply,
+      connectionId: string,
+      csrf: boolean,
+    ): Promise<AuthUser | undefined> {
+      const actor = await authenticate(request, reply)
+      if (!actor || (csrf && !validateCsrf(request, reply))) return undefined
+      if (
+        options.webAccessService
+        && !(await options.webAccessService.can(actor, connectionId, 'account-manage'))
+      ) {
+        sendError(request, reply, 403, 'FORBIDDEN')
+        return undefined
+      }
+      return actor
+    }
+
+    app.get<{
+      Params: { connectionId: string }
+      Querystring: { targetDatabase: string; engine: 'postgres' | 'mysql'; username: string; host?: string }
+    }>(
+      '/api/connections/:connectionId/accounts/grants',
+      {
+        schema: {
+          params: paramsSchema,
+          querystring: {
+            type: 'object', additionalProperties: false,
+            required: ['targetDatabase', 'engine', 'username'],
+            properties: {
+              targetDatabase: { type: 'string', minLength: 1, maxLength: 128 },
+              engine: { type: 'string', enum: ['postgres', 'mysql'] },
+              username: { type: 'string', minLength: 1, maxLength: 128 },
+              host: { type: 'string', minLength: 1, maxLength: 255 },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await requireGrantAccess(request, reply, request.params.connectionId, false)
+        if (!actor) return
+        const identity = request.query.engine === 'postgres'
+          ? { engine: 'postgres' as const, username: request.query.username }
+          : { engine: 'mysql' as const, username: request.query.username, host: request.query.host ?? '%' }
+        try {
+          return await nativeGrants.list(
+            actor,
+            request.params.connectionId,
+            request.query.targetDatabase,
+            identity,
+          )
+        } catch (error) {
+          return handleNativeGrantError(request, reply, error)
+        }
+      },
+    )
+
+    app.post<{ Params: { connectionId: string }; Body: NativeGrantCommand }>(
+      '/api/connections/:connectionId/accounts/grants',
+      {
+        schema: {
+          params: paramsSchema,
+          body: {
+            type: 'object', additionalProperties: false, required: ['kind', 'identity', 'changes'],
+            properties: {
+              kind: { type: 'string', enum: ['grant', 'revoke'] },
+              identity: identitySchema,
+              changes: { type: 'array', minItems: 1, maxItems: 100, items: changeSchema },
+              confirmed: { type: 'boolean' },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const actor = await requireGrantAccess(request, reply, request.params.connectionId, true)
+        if (!actor) return
+        try {
+          return await nativeGrants.execute(actor, request.params.connectionId, request.body)
+        } catch (error) {
+          return handleNativeGrantError(request, reply, error)
         }
       },
     )

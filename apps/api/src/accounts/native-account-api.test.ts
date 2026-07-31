@@ -9,6 +9,7 @@ import { ConnectionService } from '../connections/connection-service.js'
 import { MemoryConnectionRepository } from '../connections/memory-connection-repository.js'
 import { EnvelopeEncryption } from '../security/envelope-encryption.js'
 import type { NativeAccountService } from './native-account-service.js'
+import { NativeGrantServiceError, type NativeGrantService } from './native-grant-service.js'
 
 describe('native account HTTP API', () => {
   const apps: FastifyInstance[] = []
@@ -52,8 +53,12 @@ describe('native account HTTP API', () => {
       setEnabled: vi.fn(async () => undefined), delete: vi.fn(async () => undefined),
       restore: vi.fn(async () => undefined), revealPassword: vi.fn(async () => 'managed-native-password'),
     } as unknown as NativeAccountService
+    const nativeGrantService = {
+      list: vi.fn(async () => [{ scope: 'database', database: 'analytics', privileges: ['connect'] }]),
+      execute: vi.fn(async () => ({ appliedCount: 2 })),
+    } as unknown as NativeGrantService
     const app = await buildApp({
-      authService, connectionService, webAccessService, nativeAccountService,
+      authService, connectionService, webAccessService, nativeAccountService, nativeGrantService,
       csrfSecret: Buffer.alloc(32, 5), production: false,
     })
     apps.push(app)
@@ -64,7 +69,9 @@ describe('native account HTTP API', () => {
         csrf: response.json().csrfToken as string,
       }
     }
-    return { admin, app, connection, login, manager, nativeAccountService, webAccessService }
+    return {
+      admin, app, connection, login, manager, nativeAccountService, nativeGrantService, webAccessService,
+    }
   }
 
   it('enforces account-manage on every list and create request without exposing manager credentials', async () => {
@@ -143,5 +150,71 @@ describe('native account HTTP API', () => {
       method: 'POST', url: `/api/connections/${environment.connection.id}/accounts/account-1/verify`,
       headers, payload: {},
     })).statusCode).toBe(204)
+  })
+
+  it('lists and changes actual grants with immediate account-manage enforcement', async () => {
+    const environment = await setup()
+    const session = await environment.login('manager', 'manager-password-value')
+    const headers = { cookie: `dbweb_session=${session.cookie}`, 'x-csrf-token': session.csrf }
+    const url = `/api/connections/${environment.connection.id}/accounts/grants`
+    const query = '?targetDatabase=analytics&engine=postgres&username=reader'
+
+    expect((await environment.app.inject({ method: 'GET', url: `${url}${query}`, headers })).statusCode)
+      .toBe(403)
+    await environment.webAccessService.assign(
+      environment.admin,
+      environment.manager.id,
+      environment.connection.id,
+      ['account-manage'],
+    )
+    const listed = await environment.app.inject({ method: 'GET', url: `${url}${query}`, headers })
+    expect(listed.statusCode).toBe(200)
+    expect(listed.json()).toEqual([
+      { scope: 'database', database: 'analytics', privileges: ['connect'] },
+    ])
+
+    const command = {
+      kind: 'revoke', confirmed: true,
+      identity: { engine: 'postgres', username: 'reader' },
+      changes: [{ scope: 'database', database: 'analytics', privileges: ['connect'] }],
+    }
+    const changed = await environment.app.inject({ method: 'POST', url, headers, payload: command })
+    expect(changed.statusCode).toBe(200)
+    expect(changed.json()).toEqual({ appliedCount: 2 })
+    expect(environment.nativeGrantService.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ id: environment.manager.id }),
+      environment.connection.id,
+      command,
+    )
+  })
+
+  it('returns safe partial progress for nontransactional grant failures', async () => {
+    const environment = await setup()
+    environment.nativeGrantService.execute = vi.fn(async () => {
+      throw new NativeGrantServiceError('NATIVE_GRANT_FAILED', 1, 1)
+    })
+    const session = await environment.login('admin', 'admin-password-value')
+    const response = await environment.app.inject({
+      method: 'POST',
+      url: `/api/connections/${environment.connection.id}/accounts/grants`,
+      headers: {
+        cookie: `dbweb_session=${session.cookie}`,
+        'x-csrf-token': session.csrf,
+      },
+      payload: {
+        kind: 'grant', identity: { engine: 'postgres', username: 'reader' },
+        changes: [{ scope: 'database', database: 'analytics', privileges: ['connect'] }],
+      },
+    })
+
+    expect(response.statusCode).toBe(502)
+    expect(response.json()).toEqual({
+      error: {
+        code: 'NATIVE_GRANT_FAILED',
+        message: '原生資料庫權限異動失敗',
+        appliedCount: 1,
+        failedIndex: 1,
+      },
+    })
   })
 })
