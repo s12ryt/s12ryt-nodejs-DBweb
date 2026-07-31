@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 import type { FastifyInstance } from 'fastify'
 
+import { WebAccessService } from './access/web-access-service.js'
 import { buildApp } from './app.js'
 import { EncryptedQueryAuditRecorder } from './audit/query-audit.js'
 import { AuthService } from './auth/auth-service.js'
@@ -31,10 +32,12 @@ import { KyselyDdlAuditRepository } from './metadata/kysely-ddl-audit-repository
 import { KyselyKeepAliveEventRepository } from './metadata/kysely-keepalive-event-repository.js'
 import { KyselyMutationAuditRepository } from './metadata/kysely-mutation-audit-repository.js'
 import { KyselyQueryAuditRepository } from './metadata/kysely-query-audit-repository.js'
+import { KyselySecurityAuditRepository } from './metadata/kysely-security-audit-repository.js'
 import {
   KyselySshHostKeyResetRecorder,
   KyselySshKnownHostRepository,
 } from './metadata/kysely-ssh-known-host-repository.js'
+import { KyselyWebAccessRepository } from './metadata/kysely-web-access-repository.js'
 import {
   createMetadataDatabase,
   migrateMetadata,
@@ -44,6 +47,7 @@ import { MysqlSqlGateway } from './query/mysql-sql-gateway.js'
 import { PostgresSqlGateway } from './query/postgres-sql-gateway.js'
 import { SqlQueryService } from './query/sql-query-service.js'
 import { EnvelopeEncryption } from './security/envelope-encryption.js'
+import { EncryptedSecurityAuditRecorder } from './security/security-audit.js'
 import { SshKnownHostService } from './ssh/ssh-known-host-service.js'
 import { Ssh2TransportFactory } from './ssh/ssh2-transport-factory.js'
 import { SshTunnelPool, type SshTransportFactory } from './ssh/ssh-tunnel-pool.js'
@@ -139,11 +143,16 @@ export async function buildRuntime(
   let tunnelPool: SshTunnelPool | undefined
   try {
     await migrateMetadata(database)
+    const encryption = new EnvelopeEncryption(config.masterKey)
+    const securityAudit = new EncryptedSecurityAuditRecorder(
+      new KyselySecurityAuditRepository(database),
+      encryption,
+    )
     const authRepository = new KyselyAuthRepository(database)
     const authService = new AuthService(authRepository, {
       idleTimeoutMs: 30 * 60_000,
       absoluteTimeoutMs: 12 * 60 * 60_000,
-    })
+    }, securityAudit)
     const normalizedAdmin = config.adminUsername.toLocaleLowerCase('en-US')
     const existingAdmin = await authRepository.findUserByNormalizedUsername(normalizedAdmin)
     if (!existingAdmin) {
@@ -156,7 +165,6 @@ export async function buildRuntime(
       throw new RuntimeConfigError('BOOTSTRAP_ADMIN_CONFLICT')
     }
 
-    const encryption = new EnvelopeEncryption(config.masterKey)
     const knownHosts = new SshKnownHostService(
       new KyselySshKnownHostRepository(database),
       new KyselySshHostKeyResetRecorder(database),
@@ -175,6 +183,10 @@ export async function buildRuntime(
       encryption,
       { postgres: postgresConnector, mysql: mysqlConnector },
     )
+    const webAccessService = new WebAccessService(
+      new KyselyWebAccessRepository(database),
+      securityAudit,
+    )
     const postgresDatabase = new PostgresDatabaseGateway(undefined, socketProvider)
     const mysqlDatabase = new MysqlDatabaseGateway(undefined, socketProvider)
     const databaseExplorer = new DatabaseExplorer(connectionService, {
@@ -191,6 +203,8 @@ export async function buildRuntime(
         new KyselyMutationAuditRepository(database),
         encryption,
       ),
+      undefined,
+      (actor, connectionId) => webAccessService.can(actor, connectionId, 'data-write'),
     )
     const ddlService = new DdlService(
       connectionService,
@@ -199,6 +213,8 @@ export async function buildRuntime(
         mysql: new MysqlDdlGateway(undefined, socketProvider),
       },
       new EncryptedDdlAuditRecorder(new KyselyDdlAuditRepository(database), encryption),
+      undefined,
+      (actor, connectionId) => webAccessService.can(actor, connectionId, 'ddl-write'),
     )
     const audit = new EncryptedQueryAuditRecorder(
       new KyselyQueryAuditRepository(database),
@@ -230,6 +246,7 @@ export async function buildRuntime(
       ddlService,
       queryService,
       sshKnownHostService: knownHosts,
+      webAccessService,
       csrfSecret,
       production: config.production,
       ...(config.staticRoot ? { staticRoot: config.staticRoot } : {}),
