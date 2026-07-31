@@ -66,7 +66,14 @@ export function buildDdlStatements(
       const options = capabilities.engine === 'mysql'
         ? renderMysqlTableOptions(command.engine, command.charset, command.collation)
         : requireNoStorageOptions(command.engine, command.charset, command.collation)
-      return [`CREATE TABLE ${qualified(command.schema, command.name)} (${columns.join(', ')})${options}`]
+      let partition = ''
+      if (command.partitionBy !== undefined) {
+        if (capabilities.engine !== 'postgres' || !capabilities.advanced.partition) {
+          throw new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED')
+        }
+        partition = ` PARTITION BY ${command.partitionBy.method.toUpperCase()} (${safeFragment(command.partitionBy.expression)})`
+      }
+      return [`CREATE TABLE ${qualified(command.schema, command.name)} (${columns.join(', ')})${options}${partition}`]
     }
     case 'rename-table':
       return capabilities.engine === 'postgres'
@@ -219,9 +226,14 @@ export function buildDdlStatements(
     case 'create-partition':
       requireAdvancedCapability(capabilities, 'partition')
       requireConfirmation(command.confirmed)
-      return [capabilities.engine === 'postgres'
-        ? `CREATE TABLE ${qualified(command.schema, command.name)} PARTITION OF ${qualified(command.schema, command.table)} ${safeFragment(command.definition)}`
-        : `ALTER TABLE ${qualified(command.schema, command.table)} ADD PARTITION (PARTITION ${quoteName(command.name, quote)} ${safeFragment(command.definition)})`]
+      if (capabilities.engine === 'postgres') {
+        if (command.initialize !== undefined) throw new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED')
+        return [`CREATE TABLE ${qualified(command.schema, command.name)} PARTITION OF ${qualified(command.schema, command.table)} ${safeFragment(command.definition)}`]
+      }
+      if (command.initialize !== undefined) {
+        return [`ALTER TABLE ${qualified(command.schema, command.table)} PARTITION BY ${command.initialize.method.toUpperCase()} (${safeFragment(command.initialize.expression)}) (PARTITION ${quoteName(command.name, quote)} ${safeFragment(command.definition)})`]
+      }
+      return [`ALTER TABLE ${qualified(command.schema, command.table)} ADD PARTITION (PARTITION ${quoteName(command.name, quote)} ${safeFragment(command.definition)})`]
     case 'drop-partition':
       requireAdvancedCapability(capabilities, 'partition')
       requireConfirmation(command.confirmed)
@@ -257,7 +269,7 @@ function renderCreateRoutine(
       throw new DdlValidationError('DDL_INVALID_OPTION')
     }
     const returns = command.returns
-      ? ` RETURNS ${command.returnsSet ? 'SETOF ' : ''}${renderType(capabilities, command.returns)}`
+      ? ` RETURNS ${command.returnsSet ? 'SETOF ' : ''}${renderPostgresRoutineReturnType(capabilities, command.returns)}`
       : ''
     const volatility = command.volatility ? ` ${command.volatility.toUpperCase()}` : ''
     const security = command.security ? ` SECURITY ${command.security.toUpperCase()}` : ''
@@ -288,6 +300,12 @@ function renderCreateRoutine(
     : command.deterministic ? ' DETERMINISTIC' : ' NOT DETERMINISTIC'
   const dataAccess = command.dataAccess ? ` ${mysqlDataAccess(command.dataAccess)}` : ''
   return `CREATE ${routine} ${qualified(command.schema, command.name)}(${argumentsSql})${returns}${deterministic}${dataAccess}${security} ${body}`
+}
+
+function renderPostgresRoutineReturnType(capabilities: DdlCapabilities, type: DdlColumnType): string {
+  if (type.name.toLowerCase() !== 'trigger') return renderType(capabilities, type)
+  rejectUnusedTypeArguments(type, [])
+  return 'trigger'
 }
 
 function mysqlDataAccess(value: NonNullable<Extract<DdlCommand, { kind: 'create-routine' }>['dataAccess']>): string {

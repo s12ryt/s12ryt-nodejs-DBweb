@@ -57,6 +57,26 @@ describe('buildDdlStatements', () => {
     })).toThrow(new DdlValidationError('DDL_TYPE_UNSUPPORTED'))
   })
 
+  it('建立 PostgreSQL partitioned parent table並拒絕不支援的方言', () => {
+    expect(buildDdlStatements(postgres17, {
+      kind: 'create-table', schema: 'public', name: 'events',
+      columns: [{ name: 'id', type: { name: 'bigint' }, nullable: false }],
+      partitionBy: { method: 'range', expression: 'id' },
+    })).toEqual([
+      'CREATE TABLE "public"."events" ("id" bigint NOT NULL) PARTITION BY RANGE (id)',
+    ])
+    expect(() => buildDdlStatements(postgres96, {
+      kind: 'create-table', schema: 'public', name: 'events',
+      columns: [{ name: 'id', type: { name: 'bigint' }, nullable: false }],
+      partitionBy: { method: 'range', expression: 'id' },
+    })).toThrow(new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED'))
+    expect(() => buildDdlStatements(mysql84, {
+      kind: 'create-table', schema: 'app', name: 'events',
+      columns: [{ name: 'id', type: { name: 'bigint' }, nullable: false }],
+      partitionBy: { method: 'range', expression: 'id' },
+    })).toThrow(new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED'))
+  })
+
   it('以結構化 sequence default 還原 PostgreSQL 9.6 serial 語意', () => {
     expect(buildDdlStatements(postgres96, {
       kind: 'create-table',

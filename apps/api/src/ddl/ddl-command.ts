@@ -84,6 +84,7 @@ export type DdlCommand =
       name: string
       columns: DdlColumnDefinition[]
       primaryKey?: string[]
+      partitionBy?: { method: 'range' | 'list' | 'hash'; expression: string }
       engine?: string
       charset?: string
       collation?: string
@@ -240,6 +241,7 @@ export type DdlCommand =
       table: string
       name: string
       definition: string
+      initialize?: { method: 'range' | 'list'; expression: string }
       confirmed: boolean
     }
   | { kind: 'drop-partition'; schema: string; table: string; name: string; confirmed: boolean }

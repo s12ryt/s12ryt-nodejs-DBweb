@@ -85,6 +85,13 @@ describe('programmable DDL statements', () => {
 
   it('以結構化事件建立 PostgreSQL 與 MySQL trigger', () => {
     expect(buildDdlStatements(postgres96, {
+      kind: 'create-routine', routineKind: 'function', schema: 'public', name: 'audit_order',
+      arguments: [], returns: { name: 'trigger' }, language: 'plpgsql',
+      body: 'BEGIN RETURN NEW; END;', confirmed: true,
+    })).toEqual([
+      'CREATE FUNCTION "public"."audit_order"() RETURNS trigger LANGUAGE plpgsql AS $dbweb$BEGIN RETURN NEW; END;$dbweb$',
+    ])
+    expect(buildDdlStatements(postgres96, {
       kind: 'create-trigger', schema: 'public', table: 'orders', name: 'orders_audit',
       timing: 'after', events: ['insert', 'update'], forEach: 'row',
       functionSchema: 'public', functionName: 'audit_order', functionArguments: ['orders'],
@@ -137,6 +144,18 @@ describe('partition DDL statements', () => {
     })).toEqual([
       'ALTER TABLE `app`.`events` ADD PARTITION (PARTITION `events_2026` VALUES LESS THAN (2027))',
     ])
+    expect(buildDdlStatements(mysql56, {
+      kind: 'create-partition', schema: 'app', table: 'events', name: 'events_2026',
+      definition: 'VALUES LESS THAN (2027)',
+      initialize: { method: 'range', expression: 'id' }, confirmed: true,
+    })).toEqual([
+      'ALTER TABLE `app`.`events` PARTITION BY RANGE (id) (PARTITION `events_2026` VALUES LESS THAN (2027))',
+    ])
+    expect(() => buildDdlStatements(postgres11, {
+      kind: 'create-partition', schema: 'public', table: 'events', name: 'events_2026',
+      definition: 'FOR VALUES FROM (1) TO (2027)',
+      initialize: { method: 'range', expression: 'id' }, confirmed: true,
+    })).toThrow(new DdlValidationError('DDL_CAPABILITY_UNSUPPORTED'))
     expect(() => buildDdlStatements(mysql56, {
       kind: 'create-partition', schema: 'app', table: 'events', name: 'bad_partition',
       definition: 'VALUES LESS THAN (2027); DROP TABLE events', confirmed: true,
