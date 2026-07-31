@@ -60,6 +60,10 @@ import {
   type FriendlyCsvExportService,
 } from './transfers/friendly-csv-export-service.js'
 import { FriendlyCsvPreviewError } from './transfers/friendly-csv-preview.js'
+import { SqlDumpExportError } from './transfers/sql-dump-export-service.js'
+import { SqlDumpExportPreviewError } from './transfers/sql-dump-export-preview.js'
+import { SqlRestorePreviewError } from './transfers/sql-restore-preview.js'
+import { SqlRestoreExecutionError } from './transfers/sql-restore-service.js'
 import {
   TransferHandlerRouterError,
   type TransferExecutionHandler,
@@ -201,6 +205,10 @@ const messages = {
     IMPORT_FAILED: 'Transfer import failed',
     TRANSFER_CONFIRMATION_REQUIRED: 'Transfer operation requires confirmation',
     UNSUPPORTED_TRANSFER_HANDLER: 'This transfer format and direction are not supported',
+    INVALID_RESTORE_JOB: 'Transfer job cannot run this SQL restore',
+    RESTORE_CANCELLED: 'SQL restore was cancelled',
+    RESTORE_CHANGED: 'SQL restore preview is stale and must be regenerated',
+    RESTORE_FAILED: 'SQL restore failed',
   },
   'zh-TW': {
     FORBIDDEN: '權限不足',
@@ -289,6 +297,10 @@ const messages = {
     IMPORT_FAILED: '傳輸匯入失敗',
     TRANSFER_CONFIRMATION_REQUIRED: '傳輸操作需要確認',
     UNSUPPORTED_TRANSFER_HANDLER: '不支援此傳輸格式與方向',
+    INVALID_RESTORE_JOB: '此傳輸工作無法執行 SQL 還原',
+    RESTORE_CANCELLED: 'SQL 還原已取消',
+    RESTORE_CHANGED: 'SQL 還原預覽已失效，請重新產生',
+    RESTORE_FAILED: 'SQL 還原失敗',
   },
 } as const
 
@@ -442,6 +454,8 @@ function handleTransferError(
     error instanceof ExactJsonPreviewError
     || error instanceof ExactJsonImportPreviewError
     || error instanceof ExactCsvPreviewError
+    || error instanceof SqlDumpExportPreviewError
+    || error instanceof SqlRestorePreviewError
   ) {
     if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
     if (error.code === 'PREVIEW_NOT_FOUND') return sendError(request, reply, 404, error.code)
@@ -449,7 +463,11 @@ function handleTransferError(
       return sendError(request, reply, 409, error.code)
     }
     if (
-      (error instanceof ExactJsonImportPreviewError || error instanceof ExactCsvPreviewError)
+      (
+        error instanceof ExactJsonImportPreviewError
+        || error instanceof ExactCsvPreviewError
+        || error instanceof SqlRestorePreviewError
+      )
       && error.code === 'CONFIRMATION_REQUIRED'
     ) {
       return sendError(request, reply, 409, 'TRANSFER_CONFIRMATION_REQUIRED')
@@ -462,7 +480,11 @@ function handleTransferError(
     if (error.code === 'INVALID_EXPORT_JOB') return sendError(request, reply, 409, error.code)
     return sendError(request, reply, 502, 'EXPORT_FAILED')
   }
-  if (error instanceof ExactJsonExportError || error instanceof ExactCsvExportError) {
+  if (
+    error instanceof ExactJsonExportError
+    || error instanceof ExactCsvExportError
+    || error instanceof SqlDumpExportError
+  ) {
     if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
     if (error.code === 'EXPORT_CANCELLED' || error.code === 'INVALID_EXPORT_JOB') {
       return sendError(request, reply, 409, error.code)
@@ -481,6 +503,21 @@ function handleTransferError(
   }
   if (error instanceof CsvTransferHandlerError) {
     return sendError(request, reply, 422, 'UNSUPPORTED_TRANSFER_HANDLER')
+  }
+  if (error instanceof SqlRestoreExecutionError) {
+    if (error.code === 'FORBIDDEN') return sendError(request, reply, 403, 'FORBIDDEN')
+    if (error.code === 'INVALID_RESTORE_JOB' || error.code === 'RESTORE_CANCELLED') {
+      return sendError(request, reply, 409, error.code)
+    }
+    if (error.code === 'RESTORE_CHANGED') return sendError(request, reply, 409, error.code)
+    return reply.code(502).send({
+      error: {
+        code: 'RESTORE_FAILED',
+        message: messages[localeOf(request)].RESTORE_FAILED,
+        appliedSteps: error.appliedSteps,
+        ...(error.failedStep === undefined ? {} : { failedStep: error.failedStep }),
+      },
+    })
   }
   throw error
 }

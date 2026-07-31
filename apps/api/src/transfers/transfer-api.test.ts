@@ -16,6 +16,8 @@ import { EncryptedChunkStore } from './encrypted-chunk-store.js'
 import { ExactCsvExportError } from './exact-csv-export-service.js'
 import { ExactCsvPreviewError } from './exact-csv-preview.js'
 import { ExactJsonExportError } from './exact-json-export-service.js'
+import { SqlDumpExportPreviewError } from './sql-dump-export-preview.js'
+import { SqlRestoreExecutionError } from './sql-restore-service.js'
 import { TransferDownloadService } from './transfer-download-service.js'
 import { TransferHandlerRouter } from './transfer-handler-router.js'
 import {
@@ -119,6 +121,8 @@ describe('transfer HTTP API', () => {
       friendlyCsvExport: executionHandler,
       exactJsonExport: executionHandler,
       exactJsonImport: executionHandler,
+      sqlDumpExport: executionHandler,
+      sqlRestore: executionHandler,
     })
     const app = await buildApp({
       authService,
@@ -447,5 +451,72 @@ describe('transfer HTTP API', () => {
     })
     expect(response.statusCode).toBe(502)
     expect(response.json()).toEqual({ error: { code: 'EXPORT_FAILED', message: 'Transfer export failed' } })
+  })
+
+  it('將SQL dump preview錯誤映射為安全驗證回應', async () => {
+    const environment = await setup()
+    const headers = {
+      cookie: environment.operator.cookie,
+      'x-csrf-token': environment.operator.csrf,
+      'accept-language': 'en',
+    }
+    await environment.access.assign(
+      environment.adminUser,
+      environment.operatorUser.id,
+      'connection-1',
+      ['structure-read'],
+    )
+    const created = await environment.app.inject({
+      method: 'POST', url: '/api/transfers', headers,
+      payload: { connectionId: 'connection-1', direction: 'export', format: 'sql', includeData: false },
+    })
+    const jobId = created.json<StoredTransferJob>().id
+    environment.preview.mockRejectedValueOnce(new SqlDumpExportPreviewError('INVALID_PREVIEW'))
+
+    const response = await environment.app.inject({
+      method: 'POST', url: `/api/transfers/${jobId}/preview`, headers,
+      payload: { mapping: {}, strategy: {}, target: {} },
+    })
+
+    expect(response.statusCode).toBe(422)
+    expect(response.json()).toEqual({
+      error: { code: 'INVALID_PREVIEW', message: 'Transfer preview settings are invalid' },
+    })
+  })
+
+  it('安全回傳SQL restore的非交易partial進度', async () => {
+    const environment = await setup()
+    const headers = {
+      cookie: environment.operator.cookie,
+      'x-csrf-token': environment.operator.csrf,
+      'accept-language': 'en',
+    }
+    await environment.access.assign(
+      environment.adminUser,
+      environment.operatorUser.id,
+      'connection-1',
+      ['data-write', 'ddl-write'],
+    )
+    const created = await environment.app.inject({
+      method: 'POST', url: '/api/transfers', headers,
+      payload: { connectionId: 'connection-1', direction: 'import', format: 'sql' },
+    })
+    const jobId = created.json<StoredTransferJob>().id
+    environment.execute.mockRejectedValueOnce(new SqlRestoreExecutionError('RESTORE_FAILED', 2, 3))
+
+    const response = await environment.app.inject({
+      method: 'POST', url: `/api/transfers/${jobId}/execute`, headers,
+      payload: { previewToken: 'v1.preview-token.signature' },
+    })
+
+    expect(response.statusCode).toBe(502)
+    expect(response.json()).toEqual({
+      error: {
+        code: 'RESTORE_FAILED',
+        message: 'SQL restore failed',
+        appliedSteps: 2,
+        failedStep: 3,
+      },
+    })
   })
 })
