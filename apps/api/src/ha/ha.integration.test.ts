@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { CachedAuthRepository } from '../auth/cached-auth-repository.js'
 import type { StoredSession, StoredUser } from '../auth/auth-types.js'
 import { KyselyAuthRepository } from '../metadata/kysely-auth-repository.js'
+import { KyselyDatabaseOperationLeaseRepository } from '../metadata/kysely-database-operation-lease-repository.js'
 import { KyselyTransferJobRepository } from '../metadata/kysely-transfer-job-repository.js'
 import { KyselyTransferWorkerLeaseRepository } from '../metadata/kysely-transfer-worker-lease-repository.js'
 import { createMetadataDatabase, migrateMetadata, type MetadataKysely } from '../metadata/metadata-database.js'
@@ -18,6 +19,7 @@ import { TransferWorkerLeaseService } from '../transfers/transfer-worker-lease.j
 import { PostgresMigrationLock, KyselyPostgresMigrationSessionProvider } from './postgres-migration-lock.js'
 import { RedisFallbackCircuit } from './redis-fallback-circuit.js'
 import { createRedisRuntimeServices, type RedisRuntimeServices } from './redis-runtime.js'
+import { DatabaseOperationLeaseService, type DatabaseOperationLease } from './database-operation-gate.js'
 
 const enabled = process.env.DBWEB_HA_INTEGRATION === '1'
 const describeHa = enabled ? describe : describe.skip
@@ -199,6 +201,57 @@ describeHa('PostgreSQL, Redis, and MinIO HA integration', () => {
     expect(claimed.filter(Boolean)).toHaveLength(1)
     await expect(second.claim('worker-b', new Date('2026-08-01T00:01:01.000Z')))
       .resolves.toMatchObject({ id: job.id, leaseOwner: 'worker-b', attemptCount: 2 })
+  })
+
+  it('enforces database operation limits across PostgreSQL-backed instances', async () => {
+    const first = new DatabaseOperationLeaseService(
+      new KyselyDatabaseOperationLeaseRepository(firstDatabase),
+      { globalLimit: 2, connectionLimit: 1, leaseDurationMs: 60_000 },
+    )
+    const second = new DatabaseOperationLeaseService(
+      new KyselyDatabaseOperationLeaseRepository(secondDatabase),
+      { globalLimit: 2, connectionLimit: 1, leaseDurationMs: 60_000 },
+    )
+    const prefix = `operation-${Date.now()}`
+    const startedAt = new Date()
+    const acquired: DatabaseOperationLease[] = []
+
+    try {
+      const attempts = await Promise.all([
+        first.tryAcquire(`${prefix}-owner-a`, `${prefix}-shared`, startedAt),
+        second.tryAcquire(`${prefix}-owner-b`, `${prefix}-shared`, startedAt),
+        second.tryAcquire(`${prefix}-owner-b`, `${prefix}-other`, startedAt),
+      ])
+      acquired.push(...attempts.flatMap((lease) => lease ? [lease] : []))
+      expect(acquired).toHaveLength(2)
+      expect(acquired.filter((lease) => lease.connectionId === `${prefix}-shared`)).toHaveLength(1)
+      expect(acquired.filter((lease) => lease.connectionId === `${prefix}-other`)).toHaveLength(1)
+
+      const shared = acquired.find((lease) => lease.connectionId === `${prefix}-shared`)!
+      await (shared.ownerId.endsWith('owner-a') ? first : second).release(shared.id, shared.ownerId)
+      acquired.splice(acquired.indexOf(shared), 1)
+      const afterRelease = await first.tryAcquire(
+        `${prefix}-owner-a`,
+        `${prefix}-replacement`,
+        startedAt,
+      )
+      expect(afterRelease).toMatchObject({ connectionId: `${prefix}-replacement` })
+      acquired.push(afterRelease!)
+
+      const afterExpiry = await first.tryAcquire(
+        `${prefix}-owner-a`,
+        `${prefix}-other`,
+        new Date(startedAt.getTime() + 61_000),
+      )
+      expect(afterExpiry).toMatchObject({ connectionId: `${prefix}-other` })
+      acquired.push(afterExpiry!)
+    } finally {
+      await Promise.all(acquired.map(async (lease) => {
+        await (lease.ownerId.endsWith('owner-a') ? first : second)
+          .release(lease.id, lease.ownerId)
+          .catch(() => undefined)
+      }))
+    }
   })
 
   it('shares application-encrypted chunks across two MinIO clients', async () => {
