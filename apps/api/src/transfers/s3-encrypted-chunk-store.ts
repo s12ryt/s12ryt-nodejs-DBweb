@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import {
-  DeleteObjectsCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -143,10 +143,10 @@ export class S3EncryptedChunkStore implements TransferChunkStore {
   async deleteJob(jobId: string): Promise<void> {
     this.validateJobId(jobId)
     const keys = await this.listKeys(this.jobPrefix(jobId))
-    for (let offset = 0; offset < keys.length; offset += 1000) {
-      await this.options.client.send(new DeleteObjectsCommand({
+    for (const key of keys) {
+      await this.options.client.send(new DeleteObjectCommand({
         Bucket: this.options.bucket,
-        Delete: { Objects: keys.slice(offset, offset + 1000).map((Key) => ({ Key })) },
+        Key: key,
       }))
     }
   }

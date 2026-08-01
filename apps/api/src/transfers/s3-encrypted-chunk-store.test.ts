@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import {
-  DeleteObjectsCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -56,10 +56,8 @@ class MemoryS3Client implements S3ChunkClient {
         IsTruncated: false,
       }
     }
-    if (command instanceof DeleteObjectsCommand) {
-      for (const object of command.input.Delete?.Objects ?? []) {
-        if (object.Key) this.objects.delete(object.Key)
-      }
+    if (command instanceof DeleteObjectCommand) {
+      this.objects.delete(command.input.Key!)
       return {}
     }
     throw new Error('unexpected-command')
