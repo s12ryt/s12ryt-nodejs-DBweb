@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
+import type { FastifyInstance } from 'fastify'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { CachedAuthRepository } from '../auth/cached-auth-repository.js'
@@ -9,6 +10,7 @@ import { KyselyAuthRepository } from '../metadata/kysely-auth-repository.js'
 import { KyselyTransferJobRepository } from '../metadata/kysely-transfer-job-repository.js'
 import { KyselyTransferWorkerLeaseRepository } from '../metadata/kysely-transfer-worker-lease-repository.js'
 import { createMetadataDatabase, migrateMetadata, type MetadataKysely } from '../metadata/metadata-database.js'
+import { buildRuntime } from '../runtime.js'
 import { EnvelopeEncryption } from '../security/envelope-encryption.js'
 import { S3EncryptedChunkStore } from '../transfers/s3-encrypted-chunk-store.js'
 import type { StoredTransferJob } from '../transfers/transfer-job.js'
@@ -62,6 +64,80 @@ describeHa('PostgreSQL, Redis, and MinIO HA integration', () => {
     await Promise.all([firstDatabase.destroy(), secondDatabase.destroy()])
     s3.destroy()
   })
+
+  it('runs two active API runtimes and promotes the standby within thirty seconds', async () => {
+    const masterKey = Buffer.alloc(32, 41)
+    const instancePrefix = `ha-${Date.now()}`
+    const apps: Array<FastifyInstance | undefined> = []
+    for (let index = 1; index <= 3; index += 1) {
+      apps.push(await buildRuntime({
+        host: '127.0.0.1',
+        port: 3000 + index,
+        production: false,
+        metadata: { kind: 'postgres', connectionString: postgresUrl, maxConnections: 5 },
+        redisUrl,
+        haInstanceId: `${instancePrefix}-${index}`,
+        objectStorage: {
+          kind: 's3',
+          bucket: s3Bucket,
+          region: 'us-east-1',
+          endpoint: s3Endpoint,
+          forcePathStyle: true,
+          credentials: { accessKeyId: s3AccessKeyId, secretAccessKey: s3SecretAccessKey },
+        },
+        masterKey,
+        adminUsername: 'ha-runtime-admin',
+        adminPassword: 'ha-runtime-admin-password',
+      }))
+    }
+
+    try {
+      const health = await Promise.all(apps.map(async (app) => (
+        app!.inject({ method: 'GET', url: '/api/health' })
+      )))
+      const activeIndexes = health.flatMap((response, index) => (
+        response.json<{ role: string }>().role === 'active' ? [index] : []
+      ))
+      const standbyIndex = health.findIndex((response) => (
+        response.json<{ role: string }>().role === 'standby'
+      ))
+      expect(activeIndexes).toHaveLength(2)
+      expect(standbyIndex).toBeGreaterThanOrEqual(0)
+      expect(health[standbyIndex]?.statusCode).toBe(200)
+      await expect(apps[standbyIndex]!.inject({ method: 'GET', url: '/api/health/ready' }))
+        .resolves.toMatchObject({ statusCode: 503 })
+
+      const login = await apps[activeIndexes[0]!]!.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { username: 'ha-runtime-admin', password: 'ha-runtime-admin-password' },
+      })
+      expect(login.statusCode).toBe(200)
+      const cookie = login.headers['set-cookie'] as string
+      await expect(apps[activeIndexes[1]!]!.inject({
+        method: 'GET',
+        url: '/api/auth/me',
+        headers: { cookie },
+      })).resolves.toMatchObject({ statusCode: 200 })
+
+      const closedIndex = activeIndexes[0]!
+      await apps[closedIndex]!.close()
+      apps[closedIndex] = undefined
+      const deadline = Date.now() + 30_000
+      let promoted = false
+      while (Date.now() < deadline) {
+        const response = await apps[standbyIndex]!.inject({ method: 'GET', url: '/api/health/ready' })
+        if (response.statusCode === 200) {
+          promoted = true
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+      expect(promoted).toBe(true)
+    } finally {
+      await Promise.all(apps.flatMap((app) => app ? [app.close()] : []))
+    }
+  }, 60_000)
 
   it('serializes migrations and shares sessions with immediate PostgreSQL-authoritative revocation', async () => {
     let active = 0
