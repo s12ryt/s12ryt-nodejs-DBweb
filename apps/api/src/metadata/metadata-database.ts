@@ -195,6 +195,19 @@ interface HaInstanceLeasesTable {
   updated_at: string
 }
 
+interface DatabaseOperationLockTable {
+  id: number
+  revision: number
+}
+
+interface DatabaseOperationLeasesTable {
+  id: string
+  owner_id: string
+  connection_id: string
+  acquired_at: string
+  expires_at: string
+}
+
 interface TransferJobsTable {
   id: string
   owner_id: string
@@ -263,6 +276,8 @@ export interface MetadataDatabase {
   transfer_preview_plans: TransferPreviewPlansTable
   ha_instance_lock: HaInstanceLockTable
   ha_instance_leases: HaInstanceLeasesTable
+  database_operation_lock: DatabaseOperationLockTable
+  database_operation_leases: DatabaseOperationLeasesTable
   web_access_assignments: WebAccessAssignmentsTable
 }
 
@@ -480,6 +495,28 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .addColumn('role', 'varchar(16)', (column) => column.notNull())
     .addColumn('lease_expires_at', 'varchar(35)', (column) => column.notNull())
     .addColumn('updated_at', 'varchar(35)', (column) => column.notNull())
+    .execute()
+
+  await database.schema
+    .createTable('database_operation_lock')
+    .ifNotExists()
+    .addColumn('id', 'integer', (column) => column.primaryKey())
+    .addColumn('revision', 'integer', (column) => column.notNull())
+    .execute()
+  await database
+    .insertInto('database_operation_lock')
+    .values({ id: 1, revision: 0 })
+    .onConflict((conflict) => conflict.column('id').doNothing())
+    .execute()
+
+  await database.schema
+    .createTable('database_operation_leases')
+    .ifNotExists()
+    .addColumn('id', 'varchar(36)', (column) => column.primaryKey())
+    .addColumn('owner_id', 'varchar(200)', (column) => column.notNull())
+    .addColumn('connection_id', 'varchar(128)', (column) => column.notNull())
+    .addColumn('acquired_at', 'varchar(35)', (column) => column.notNull())
+    .addColumn('expires_at', 'varchar(35)', (column) => column.notNull())
     .execute()
 
   await database.schema
@@ -751,6 +788,20 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .createIndex('transfer_preview_plans_expires_at_index')
     .ifNotExists()
     .on('transfer_preview_plans')
+    .column('expires_at')
+    .execute()
+
+  await database.schema
+    .createIndex('database_operation_leases_connection_index')
+    .ifNotExists()
+    .on('database_operation_leases')
+    .columns(['connection_id', 'expires_at'])
+    .execute()
+
+  await database.schema
+    .createIndex('database_operation_leases_expires_at_index')
+    .ifNotExists()
+    .on('database_operation_leases')
     .column('expires_at')
     .execute()
 }
