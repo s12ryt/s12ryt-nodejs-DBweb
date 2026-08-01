@@ -1,5 +1,6 @@
 import type { ConnectionService } from '../connections/connection-service.js'
 import type { DatabaseEngine } from '../connections/connection-types.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import type { SecurityAuditRecorder } from '../security/security-audit.js'
 import type { NativeAccountCredentialVault } from './native-account-credential.js'
 import type {
@@ -105,7 +106,8 @@ export class NativeAccountVerifier {
         updatedAt: now.toISOString(),
       })
       await this.audit(account, 'success')
-    } catch {
+    } catch (error) {
+      if (error instanceof DatabaseOperationGateError) return
       await this.recordFailure(account, now)
     }
   }

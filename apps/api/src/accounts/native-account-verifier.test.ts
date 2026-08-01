@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ResolvedConnection } from '../connections/connection-types.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import { EnvelopeEncryption } from '../security/envelope-encryption.js'
 import type { SecurityAuditRecorder } from '../security/security-audit.js'
 import { NativeAccountCredentialVault } from './native-account-credential.js'
@@ -110,6 +111,22 @@ describe('NativeAccountVerifier', () => {
       ['native-account-verification', 'failed'],
     ])
     expect(JSON.stringify(vi.mocked(securityAudit.record).mock.calls)).not.toContain('driver-secret')
+  })
+
+  it('does not treat database capacity limits as credential failures', async () => {
+    const busy = new DatabaseOperationGateError('DATABASE_OPERATION_BUSY', true)
+    const verifyCredential = vi.fn<NativeAccountGateway['verifyCredential']>(async () => {
+      throw busy
+    })
+    const { repository, securityAudit, vault, verifier } = setup(verifyCredential)
+    const id = 'capacity-limited'
+    await repository.save(account(id, vault.seal(id, 'password-value-long').encryptedPassword))
+    const before = await repository.findById(id)
+
+    await verifier.tick()
+
+    expect(await repository.findById(id)).toEqual(before)
+    expect(securityAudit.record).not.toHaveBeenCalled()
   })
 
   it('schedules an immediate non-overlapping check and waits for it during shutdown', async () => {
