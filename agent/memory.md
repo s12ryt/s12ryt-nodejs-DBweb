@@ -111,3 +111,6 @@
 - 完成百萬列瀏覽路徑RED→GREEN：PG/MySQL會從catalog選PK或全欄非空unique key，以opaque canonical cursor與全參數化lexicographic predicate做正反向keyset分頁；無穩定鍵才使用offset，硬上限100,000並在Web顯示慢頁警告。
 - 完成SQL NDJSON串流RED→GREEN：SqlQueryService共用原active query map、cancel及audit；PG pg-cursor與MySQL callback query stream在唯讀交易內逐批輸出，runtime以AsyncIterable operation gate包住完整生命週期。一般user限制100k列/256MiB，admin限制1m列/2GiB，timeout最多5分鐘。
 - 新增百萬列自動化功能負載，實際逐列消費1,000,000筆SQL NDJSON與1,000,000筆exact JSON transfer records且不收集整份輸出；完整候選單元回歸為136個測試檔、530 tests通過。相對效能與RSS門檻仍須由後續同runner baseline/candidate harness證明。
+- GitHub Actions run `30680694803` 的quality、Docker/HA Compose、browser、四版本資料庫與ha-integration全部通過，百萬列互動路徑遠端回歸完成。
+- 依RED→GREEN新增效能統計契約與runner：nearest-rank p95、TTFB、成功throughput、error rate及三API RSS；候選相對baseline的latency/TTFB退化與throughput下降上限均15%，error rate必須低於1%，RSS必須低於1.5GiB且steady成長不超過10%。
+- 新增`.github/workflows/performance.yml`，在同runner使用push前SHA與candidate各自建image並依序啟動同一HA Compose；每輪建立100個PG connection profiles與百萬列表，以10個並行操作者執行120秒warmup及600秒steady的rows/NDJSON負載。結果保存JSON artifact；本機無Docker，首次真實workflow仍待遠端驗證。

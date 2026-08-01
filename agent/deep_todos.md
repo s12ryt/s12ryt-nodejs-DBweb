@@ -110,3 +110,5 @@
 - 2026-08-01：完成百萬列互動路徑第一階段。資料瀏覽會優先選 primary key 或所有欄位皆非空的 unique key，以 opaque keyset cursor、參數化 lexicographic predicate及正反向排序分頁；無穩定鍵才降級 offset，最大 100,000 並回傳 UI 警告。PostgreSQL/MySQL catalog、API與雙語工作台均已有回歸測試。
 - 2026-08-01：SQL 新增唯讀 NDJSON 背壓串流，共用既有 query ID/cancel/audit；PostgreSQL 使用 cursor、MySQL 使用 callback query stream，皆在唯讀一致性交易內且支援 abort、timeout、consumer early close與 operation gate。一般使用者上限 100,000 列/256MiB，管理員上限 1,000,000 列/2GiB，timeout 最大五分鐘。
 - 2026-08-01：自動化功能負載已逐列消費 1,000,000 筆 SQL NDJSON 與 1,000,000 筆 exact JSON transfer records，未在測試中收集完整結果；完整單元候選目前為 136 個測試檔、530 tests 通過。此證據只證明惰性串流與上限，不取代後續同 runner baseline/candidate 相對效能門檻。
+- 2026-08-01：GitHub Actions run `30680694803` 完整全綠；quality、Docker/HA Compose、browser、PostgreSQL 9.6/17、MySQL 5.6/8.4 與 ha-integration 均通過，確認 keyset、受限 offset、SQL NDJSON 與百萬列惰性串流未破壞既有功能。
+- 2026-08-01：新增同 runner baseline/candidate 效能驗收。main profile固定建立100個connection profiles、10個並行操作者、120秒warmup與600秒steady；量測keyset rows、NDJSON TTFB/p95/throughput/error及三API容器RSS。門檻為相對退化15%、錯誤率低於1%、RSS低於1.5GiB且steady成長不超過10%；手動smoke不能取代正式證據。此workflow待首次GitHub實跑。
