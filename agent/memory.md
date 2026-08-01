@@ -107,3 +107,4 @@
 - 依 RED -> GREEN 完成跨實例 database operation gate：PostgreSQL metadata lease限制全域100與每connection 10筆操作，60秒租約、20秒heartbeat、30秒排隊；Kysely lock row序列化配額，Promise/AsyncIterable/session adapters確保租約涵蓋完整DB操作生命週期。
 - runtime已將連線測試、瀏覽、SQL/keepalive、mutation、DDL、原生帳號/grants、transfer data/import、SQL dump snapshot/restore全部接入共同gate；容量耗盡回固定503與Retry-After，SQL/DDL/mutation/grant service保留可重試錯誤，原生帳號手動與背景驗證不污染credential狀態或audit。
 - HA integration新增兩個獨立PostgreSQL handles並行驗證全域/connection配額、release讓位與expired lease回收；本機無外部服務時明確略過，待GitHub Actions執行真實證據。
+- M6 operation gate以13筆English plain原子提交推送；GitHub Actions run `30678948821` 的quality、Docker/HA Compose、browser、PostgreSQL9.6/17、MySQL5.6/8.4及ha-integration全部通過。HA job已真實證明跨兩個PostgreSQL handles的全域/connection配額、release讓位與expired lease回收。
