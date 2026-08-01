@@ -45,4 +45,24 @@ describe('performance runner', () => {
       smoke: true,
     }).smoke).toBe(true);
   });
+
+  it('validates only profile fields when called with complete runtime options', () => {
+    const runtimeOptions = {
+      baseUrl: 'http://127.0.0.1:3000',
+      revision: 'candidate',
+      connectionProfiles: 100,
+      concurrentOperators: 10,
+      warmupSeconds: 120,
+      steadySeconds: 600,
+      smoke: false,
+    };
+
+    expect(validatePerformanceRunnerOptions(runtimeOptions)).toEqual({
+      connectionProfiles: 100,
+      concurrentOperators: 10,
+      warmupSeconds: 120,
+      steadySeconds: 600,
+      smoke: false,
+    });
+  });
 });

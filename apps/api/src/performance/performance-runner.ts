@@ -50,21 +50,28 @@ export interface PerformanceProfileOptions {
 export function validatePerformanceRunnerOptions(
   input: PerformanceProfileOptions,
 ): PerformanceProfileOptions {
-  for (const [name, value] of Object.entries(input)) {
+  const profile: PerformanceProfileOptions = {
+    connectionProfiles: input.connectionProfiles,
+    concurrentOperators: input.concurrentOperators,
+    warmupSeconds: input.warmupSeconds,
+    steadySeconds: input.steadySeconds,
+    smoke: input.smoke,
+  }
+  for (const [name, value] of Object.entries(profile)) {
     if (name === 'smoke') continue
     if (!Number.isInteger(value) || Number(value) <= 0) {
       throw new TypeError(`${name} must be a positive integer`)
     }
   }
-  if (!input.smoke && (
-    input.connectionProfiles !== 100
-    || input.concurrentOperators !== 10
-    || input.warmupSeconds !== 120
-    || input.steadySeconds !== 600
+  if (!profile.smoke && (
+    profile.connectionProfiles !== 100
+    || profile.concurrentOperators !== 10
+    || profile.warmupSeconds !== 120
+    || profile.steadySeconds !== 600
   )) {
     throw new TypeError('full performance profile must use 100 connections, 10 operators, 120s warmup, and 600s steady state')
   }
-  return { ...input }
+  return profile
 }
 
 export function parseContainerMemoryUsage(value: string): number {
