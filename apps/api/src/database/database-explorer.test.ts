@@ -37,7 +37,14 @@ async function setup() {
     describeTable: vi.fn(async () => [
       { name: 'id', dataType: 'integer', nullable: false, primaryKey: true },
     ]),
-    readRows: vi.fn(async () => ({ columns: ['id'], rows: [{ id: 1 }], nextOffset: 1 })),
+    findStableKey: vi.fn(async () => ['id']),
+    readRows: vi.fn(async () => ({
+      columns: ['id'],
+      rows: [{ id: 1 }],
+      paginationMode: 'keyset' as const,
+      nextCursor: 'next',
+      previousCursor: null,
+    })),
   }
   return { explorer: new DatabaseExplorer(connections, { postgres: gateway, mysql: gateway }), gateway, profile }
 }
@@ -56,13 +63,18 @@ describe('DatabaseExplorer', () => {
     expect(gateway.listSchemas).toHaveBeenCalledWith(expect.objectContaining({ password: 'database-secret' }))
   })
 
-  it('資料瀏覽預設 100 列，最多 1000 列，且 offset 不得為負數', async () => {
+  it('有穩定鍵時使用keyset，並保留預設100列與1000列上限', async () => {
     const { explorer, gateway, profile } = await setup()
 
     await explorer.readRows(profile.id, 'public', 'orders', {})
     expect(gateway.readRows).toHaveBeenCalledWith(
       expect.objectContaining({ id: profile.id }),
-      { schema: 'public', table: 'orders', limit: 100, offset: 0 },
+      {
+        schema: 'public',
+        table: 'orders',
+        limit: 100,
+        pagination: { mode: 'keyset', key: ['id'], direction: 'forward' },
+      },
     )
 
     await expect(
@@ -71,5 +83,30 @@ describe('DatabaseExplorer', () => {
     await expect(
       explorer.readRows(profile.id, 'public', 'orders', { offset: -1 }),
     ).rejects.toEqual(new ExplorerError('INVALID_PAGE'))
+  })
+
+  it('沒有穩定鍵時退回offset、標示慢查警告並拒絕超過100000', async () => {
+    const { explorer, gateway, profile } = await setup()
+    vi.mocked(gateway.findStableKey!).mockResolvedValue(undefined)
+    vi.mocked(gateway.readRows).mockResolvedValue({
+      columns: ['note'],
+      rows: [{ note: 'x' }],
+      paginationMode: 'offset',
+      nextOffset: 100_000,
+      warning: 'OFFSET_PAGINATION',
+    })
+
+    await explorer.readRows(profile.id, 'public', 'logs', { offset: 99_999 })
+    expect(gateway.readRows).toHaveBeenCalledWith(
+      expect.objectContaining({ id: profile.id }),
+      {
+        schema: 'public',
+        table: 'logs',
+        limit: 100,
+        pagination: { mode: 'offset', offset: 99_999 },
+      },
+    )
+    await expect(explorer.readRows(profile.id, 'public', 'logs', { offset: 100_001 }))
+      .rejects.toEqual(new ExplorerError('INVALID_PAGE'))
   })
 })
