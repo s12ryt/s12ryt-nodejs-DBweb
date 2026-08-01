@@ -6,6 +6,7 @@ describe('HA deployment configuration', () => {
   it('defines three API instances with shared dependencies and distinct PostgreSQL-backed roles', async () => {
     const compose = await readFile('compose.ha.yaml', 'utf8')
 
+    expect(compose).toContain('image: ${DBWEB_IMAGE:-dbweb:ha}')
     expect(compose).toContain('api-1:')
     expect(compose).toContain('api-2:')
     expect(compose).toContain('api-3:')
@@ -31,5 +32,16 @@ describe('HA deployment configuration', () => {
     const workflow = await readFile('.github/workflows/ci.yml', 'utf8')
 
     expect(workflow).toContain('docker compose --file compose.ha.yaml config')
+  })
+
+  it('compares the pre-push baseline and candidate on one runner with the full profile', async () => {
+    const workflow = await readFile('.github/workflows/performance.yml', 'utf8')
+
+    expect(workflow).toContain('EVENT_BASELINE_SHA: ${{ github.event.before }}')
+    expect(workflow).toContain('connections=100')
+    expect(workflow).toContain('operators=10')
+    expect(workflow).toContain('warmup=120')
+    expect(workflow).toContain('steady=600')
+    expect(workflow).toContain('performance-compare.ts')
   })
 })

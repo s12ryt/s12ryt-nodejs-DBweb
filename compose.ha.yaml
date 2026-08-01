@@ -15,7 +15,7 @@ x-api-environment: &api-environment
 x-api-common: &api-common
   build:
     context: .
-  image: dbweb:ha
+  image: ${DBWEB_IMAGE:-dbweb:ha}
   restart: unless-stopped
   depends_on:
     postgres:
@@ -75,7 +75,7 @@ services:
     restart: unless-stopped
 
   minio-init:
-    image: dbweb:ha
+    image: ${DBWEB_IMAGE:-dbweb:ha}
     depends_on:
       minio:
         condition: service_healthy

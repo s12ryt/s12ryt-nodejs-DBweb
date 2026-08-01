@@ -1,0 +1,136 @@
+name: Performance
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: Run a short smoke profile instead of the contractual full profile
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relative-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Select performance profile
+        id: profile
+        shell: bash
+        run: |
+          if [[ "${{ inputs.smoke || false }}" == "true" ]]; then
+            echo "connections=10" >> "$GITHUB_OUTPUT"
+            echo "operators=2" >> "$GITHUB_OUTPUT"
+            echo "warmup=5" >> "$GITHUB_OUTPUT"
+            echo "steady=30" >> "$GITHUB_OUTPUT"
+            echo "smoke=--smoke" >> "$GITHUB_OUTPUT"
+          else
+            echo "connections=100" >> "$GITHUB_OUTPUT"
+            echo "operators=10" >> "$GITHUB_OUTPUT"
+            echo "warmup=120" >> "$GITHUB_OUTPUT"
+            echo "steady=600" >> "$GITHUB_OUTPUT"
+            echo "smoke=" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build candidate and baseline images
+        env:
+          EVENT_BASELINE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          baseline_sha="$EVENT_BASELINE_SHA"
+          if [[ -z "$baseline_sha" || "$baseline_sha" =~ ^0+$ ]]; then
+            baseline_sha="$(git rev-parse HEAD^)"
+          fi
+          git cat-file -e "$baseline_sha^{commit}"
+          echo "BASELINE_SHA=$baseline_sha" >> "$GITHUB_ENV"
+          git worktree add "$RUNNER_TEMP/dbweb-baseline" "$baseline_sha"
+          docker build --tag dbweb:perf-baseline "$RUNNER_TEMP/dbweb-baseline"
+          docker build --tag dbweb:perf-candidate .
+      - name: Run baseline
+        env:
+          DBWEB_IMAGE: dbweb:perf-baseline
+          DBWEB_PORT: 3000
+          DBWEB_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          DBWEB_ADMIN_PASSWORD: performance-admin-password
+          DBWEB_POSTGRES_PASSWORD: performance-postgres-password
+          DBWEB_MINIO_ACCESS_KEY: performance-minio
+          DBWEB_MINIO_SECRET_KEY: performance-minio-password
+          DBWEB_PERFORMANCE_ADMIN_PASSWORD: performance-admin-password
+          DBWEB_PERFORMANCE_DATABASE_PASSWORD: performance-postgres-password
+        shell: bash
+        run: |
+          docker compose --project-name dbweb-perf --file compose.ha.yaml up --detach --no-build
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/health/ready >/dev/null; then break; fi
+            if [[ "$attempt" == "60" ]]; then docker compose --project-name dbweb-perf --file compose.ha.yaml logs; exit 1; fi
+            sleep 2
+          done
+          pnpm --filter @dbweb/api exec tsx src/performance/performance-runner.ts \
+            --base-url http://127.0.0.1:3000 --revision "$BASELINE_SHA" \
+            --output "$RUNNER_TEMP/baseline.json" --compose-project dbweb-perf \
+            --connections ${{ steps.profile.outputs.connections }} \
+            --operators ${{ steps.profile.outputs.operators }} \
+            --warmup ${{ steps.profile.outputs.warmup }} \
+            --steady ${{ steps.profile.outputs.steady }} ${{ steps.profile.outputs.smoke }}
+          docker compose --project-name dbweb-perf --file compose.ha.yaml down --volumes
+      - name: Run candidate
+        env:
+          DBWEB_IMAGE: dbweb:perf-candidate
+          DBWEB_PORT: 3000
+          DBWEB_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          DBWEB_ADMIN_PASSWORD: performance-admin-password
+          DBWEB_POSTGRES_PASSWORD: performance-postgres-password
+          DBWEB_MINIO_ACCESS_KEY: performance-minio
+          DBWEB_MINIO_SECRET_KEY: performance-minio-password
+          DBWEB_PERFORMANCE_ADMIN_PASSWORD: performance-admin-password
+          DBWEB_PERFORMANCE_DATABASE_PASSWORD: performance-postgres-password
+        shell: bash
+        run: |
+          docker compose --project-name dbweb-perf --file compose.ha.yaml up --detach --no-build
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/health/ready >/dev/null; then break; fi
+            if [[ "$attempt" == "60" ]]; then docker compose --project-name dbweb-perf --file compose.ha.yaml logs; exit 1; fi
+            sleep 2
+          done
+          pnpm --filter @dbweb/api exec tsx src/performance/performance-runner.ts \
+            --base-url http://127.0.0.1:3000 --revision "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/candidate.json" --compose-project dbweb-perf \
+            --connections ${{ steps.profile.outputs.connections }} \
+            --operators ${{ steps.profile.outputs.operators }} \
+            --warmup ${{ steps.profile.outputs.warmup }} \
+            --steady ${{ steps.profile.outputs.steady }} ${{ steps.profile.outputs.smoke }}
+          docker compose --project-name dbweb-perf --file compose.ha.yaml down --volumes
+      - name: Enforce relative performance gates
+        run: >-
+          pnpm --filter @dbweb/api exec tsx src/performance/performance-compare.ts
+          --baseline "$RUNNER_TEMP/baseline.json"
+          --candidate "$RUNNER_TEMP/candidate.json"
+      - name: Upload performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results
+          path: |
+            ${{ runner.temp }}/baseline.json
+            ${{ runner.temp }}/candidate.json
+          if-no-files-found: warn
+      - name: Clean performance environment
+        if: always()
+        run: docker compose --project-name dbweb-perf --file compose.ha.yaml down --volumes --remove-orphans
