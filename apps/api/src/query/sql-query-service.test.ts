@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ConnectionService } from '../connections/connection-service.js'
 import { MemoryConnectionRepository } from '../connections/memory-connection-repository.js'
 import { EnvelopeEncryption } from '../security/envelope-encryption.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import {
   isReadOnlySql,
   QueryError,
@@ -160,5 +161,16 @@ describe('SqlQueryService', () => {
     expect(isReadOnlySql("SELECT 'DELETE; UPDATE', 1 -- DROP\n")).toBe(true)
     expect(isReadOnlySql('SHOW TABLES')).toBe(true)
     expect(isReadOnlySql('CALL read_report()')).toBe(false)
+  })
+
+  it('保留可重試的資料庫操作忙碌錯誤', async () => {
+    const busy = new DatabaseOperationGateError('DATABASE_OPERATION_BUSY', true)
+    const { service, profile } = await setup({ execute: vi.fn(async () => { throw busy }) })
+
+    await expect(service.execute('user-1', {
+      queryId: '77777777-7777-4777-8777-777777777777',
+      connectionId: profile.id,
+      sql: 'SELECT 1',
+    })).rejects.toBe(busy)
   })
 })

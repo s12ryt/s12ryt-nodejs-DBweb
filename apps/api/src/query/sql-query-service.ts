@@ -1,5 +1,6 @@
 import type { ConnectionService } from '../connections/connection-service.js'
 import type { DatabaseEngine, ResolvedConnection } from '../connections/connection-types.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 
 export type QueryStatus = 'success' | 'failed' | 'cancelled' | 'timeout'
 
@@ -123,6 +124,7 @@ export class SqlQueryService {
       await this.recordAudit(input, userId, startedAt, 'success', rows.length)
       return { ...result, rows, truncated, durationMs: Math.max(0, this.now() - startedAt) }
     } catch (error) {
+      if (error instanceof DatabaseOperationGateError) throw error
       const queryError =
         controller.signal.reason instanceof QueryError
           ? controller.signal.reason
