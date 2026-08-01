@@ -100,6 +100,38 @@ describe('database explorer HTTP API', () => {
     })
   })
 
+  it('將不透明keyset cursor與方向交給Explorer，並在HTTP邊界限制offset', async () => {
+    const cursor = 'eyJ2IjoxLCJrZXkiOlsiaWQiXSwidmFsdWVzIjpbNDJdLCJkaXJlY3Rpb24iOiJmb3J3YXJkIn0'
+    const readRows = vi.fn(async () => ({
+      columns: ['id'],
+      rows: [{ id: 43 }],
+      paginationMode: 'keyset' as const,
+      nextCursor: null,
+      previousCursor: 'previous',
+    }))
+    const { app, cookie } = await setup({ readRows } as Partial<DatabaseExplorer>)
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/connections/c1/schemas/public/tables/orders/rows?limit=50&cursor=${cursor}&direction=forward`,
+      headers: { cookie },
+    })
+    const tooDeep = await app.inject({
+      method: 'GET',
+      url: '/api/connections/c1/schemas/public/tables/orders/rows?offset=100001',
+      headers: { cookie },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(readRows).toHaveBeenCalledWith('c1', 'public', 'orders', {
+      limit: 50,
+      offset: 0,
+      cursor,
+      direction: 'forward',
+    })
+    expect(tooDeep.statusCode).toBe(400)
+  })
+
   it('資料庫操作配額忙碌時回可重試503且不洩漏租約資訊', async () => {
     const { app, cookie } = await setup({
       listSchemas: vi.fn(async () => {

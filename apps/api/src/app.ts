@@ -40,6 +40,7 @@ import { DatabaseOperationGateError } from './ha/database-operation-gate.js'
 import {
   QueryError,
   type ExecuteQueryInput,
+  type StreamQueryInput,
   type SqlQueryService,
 } from './query/sql-query-service.js'
 import type { SshKnownHostService } from './ssh/ssh-known-host-service.js'
@@ -1925,7 +1926,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
     app.get<{
       Params: { id: string; schema: string; table: string }
-      Querystring: { limit?: number; offset?: number }
+      Querystring: {
+        limit?: number
+        offset?: number
+        cursor?: string
+        direction?: 'forward' | 'backward'
+      }
     }>(
       '/api/connections/:id/schemas/:schema/tables/:table/rows',
       {
@@ -1936,7 +1942,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
             additionalProperties: false,
             properties: {
               limit: { type: 'integer', minimum: 1, maximum: 1000, default: 100 },
-              offset: { type: 'integer', minimum: 0, default: 0 },
+              offset: { type: 'integer', minimum: 0, maximum: 100_000, default: 0 },
+              cursor: { type: 'string', minLength: 1, maxLength: 8192, pattern: '^[A-Za-z0-9_-]+$' },
+              direction: { type: 'string', enum: ['forward', 'backward'] },
             },
           },
         },
@@ -2007,6 +2015,41 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           }
           throw error
         }
+      },
+    )
+
+    app.post<{ Body: StreamQueryInput }>(
+      '/api/queries/stream',
+      {
+        schema: {
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['queryId', 'connectionId', 'sql'],
+            properties: {
+              queryId: {
+                type: 'string',
+                pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$',
+              },
+              connectionId: { type: 'string', minLength: 1, maxLength: 128 },
+              sql: { type: 'string', minLength: 1, maxLength: 1_048_576 },
+              timeoutMs: { type: 'integer', minimum: 100, maximum: 300_000 },
+              rowLimit: { type: 'integer', minimum: 1, maximum: 1_000_000 },
+              byteLimit: { type: 'integer', minimum: 1, maximum: 2_147_483_648 },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const user = await authenticate(request, reply)
+        if (!user || !validateCsrf(request, reply)) return
+        if (
+          options.webAccessService
+          && !(await options.webAccessService.can(user, request.body.connectionId, 'query-read'))
+        ) return sendError(request, reply, 403, 'FORBIDDEN')
+        reply.header('Content-Type', 'application/x-ndjson; charset=utf-8')
+        reply.header('X-Accel-Buffering', 'no')
+        return reply.send(Readable.from(queryService.stream(user.id, user.role, request.body)))
       },
     )
 

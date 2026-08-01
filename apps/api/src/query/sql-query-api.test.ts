@@ -16,7 +16,10 @@ describe('SQL query HTTP API', () => {
     affectedRows: 1,
     truncated: false,
     durationMs: 2,
-  }))) {
+  })), stream: SqlQueryService['stream'] = vi.fn(async function* () {
+    yield '{"type":"meta","queryId":"stream"}\n'
+    yield '{"type":"summary","rowCount":0,"dataBytes":0,"truncated":false,"durationMs":1}\n'
+  })) {
     const authService = new AuthService(new MemoryAuthRepository(), {
       idleTimeoutMs: 30 * 60_000,
       absoluteTimeoutMs: 12 * 60 * 60_000,
@@ -29,6 +32,7 @@ describe('SQL query HTTP API', () => {
     })
     const queryService = {
       execute,
+      stream,
       cancel: vi.fn(async () => true),
     } as unknown as SqlQueryService
     const app = await buildApp({
@@ -106,5 +110,32 @@ describe('SQL query HTTP API', () => {
 
     expect(response.statusCode).toBe(204)
     expect(queryService.cancel).toHaveBeenCalledWith(user.id, '33333333-3333-4333-8333-333333333333')
+  })
+
+  it('以NDJSON串流唯讀SQL並由server傳入使用者角色限制', async () => {
+    const stream = vi.fn(async function* () {
+      yield '{"type":"meta","queryId":"44444444-4444-4444-8444-444444444444"}\n'
+      yield '{"type":"row","row":{"id":1}}\n'
+      yield '{"type":"summary","rowCount":1,"dataBytes":28,"truncated":false,"durationMs":2}\n'
+    })
+    const { app, user, cookie, csrfToken } = await setup(undefined, stream)
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/queries/stream',
+      headers: { cookie, 'x-csrf-token': csrfToken },
+      payload: {
+        queryId: '44444444-4444-4444-8444-444444444444',
+        connectionId: 'connection-1',
+        sql: 'SELECT id FROM reports',
+        timeoutMs: 30_000,
+        rowLimit: 100_000,
+        byteLimit: 268_435_456,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['content-type']).toContain('application/x-ndjson')
+    expect(response.body).toContain('"type":"row"')
+    expect(stream).toHaveBeenCalledWith(user.id, 'user', expect.objectContaining({ rowLimit: 100_000 }))
   })
 })
