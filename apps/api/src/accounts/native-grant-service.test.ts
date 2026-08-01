@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AuthUser } from '../auth/auth-types.js'
 import type { ResolvedConnection } from '../connections/connection-types.js'
 import type { SecurityAuditEvent } from '../security/security-audit.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import type { ActualNativeAccount } from './native-account-service.js'
 import { NativeGrantGatewayError, type NativeGrantGateway } from './native-grant-gateway.js'
 import {
@@ -118,6 +119,16 @@ describe('NativeGrantService', () => {
       }),
     })])
     expect(JSON.stringify(audits)).not.toContain('database-secret')
+  })
+
+  it('保留可重試的資料庫操作忙碌錯誤', async () => {
+    const busy = new DatabaseOperationGateError('DATABASE_OPERATION_BUSY', true)
+    const { service } = setup({ execute: async () => { throw busy } })
+
+    await expect(service.execute(admin, 'c1', {
+      kind: 'grant', identity: reader.identity,
+      changes: [{ scope: 'database', database: 'analytics', privileges: ['connect'] }],
+    })).rejects.toBe(busy)
   })
 
   it('audits each MySQL step and reports partial progress without compensating', async () => {

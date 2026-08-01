@@ -1,6 +1,7 @@
 import type { AuthUser } from '../auth/auth-types.js'
 import type { ConnectionService } from '../connections/connection-service.js'
 import type { DatabaseEngine, ResolvedConnection } from '../connections/connection-types.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import type { SecurityAuditRecorder } from '../security/security-audit.js'
 import type { NativeAccountGateway } from './native-account-service.js'
 import {
@@ -98,6 +99,7 @@ export class NativeGrantService {
       await this.audit(actor, connectionId, normalizedCommand, normalizedPlan.statements, 'success', result.appliedCount)
       return result
     } catch (error) {
+      if (error instanceof DatabaseOperationGateError) throw error
       const failure = error instanceof NativeGrantGatewayError
         ? error
         : new NativeGrantGatewayError('NATIVE_GRANT_FAILED', 0, 0)
@@ -127,7 +129,8 @@ export class NativeGrantService {
         await this.gateways.mysql.execute(connection, command.changes[0]!.database, [statement])
         appliedCount += 1
         await this.audit(actor, connectionId, command, [statement], 'success', appliedCount)
-      } catch {
+      } catch (error) {
+        if (error instanceof DatabaseOperationGateError) throw error
         await this.audit(actor, connectionId, command, [statement], 'failed', appliedCount, index)
         throw new NativeGrantServiceError('NATIVE_GRANT_FAILED', appliedCount, index)
       }
