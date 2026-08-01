@@ -94,4 +94,19 @@ describe('TransferJobWorkerScheduler', () => {
     await stopping
     expect(stopped).toBe(true)
   })
+
+  it('standby停止後可在再次晉升active時重新啟動', async () => {
+    vi.useFakeTimers()
+    const runOnce = vi.fn(async () => false)
+    const scheduler = new TransferJobWorkerScheduler({ runOnce }, { pollIntervalMs: 30_000 })
+
+    scheduler.start()
+    await vi.advanceTimersByTimeAsync(0)
+    await scheduler.stop()
+    scheduler.start()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(runOnce).toHaveBeenCalledTimes(2)
+    await scheduler.stop()
+  })
 })

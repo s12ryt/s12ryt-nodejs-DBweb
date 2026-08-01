@@ -42,6 +42,10 @@ import { RetainedKeepAliveRecorder } from './keepalive/keepalive-event.js'
 import { RedisFallbackCircuit } from './ha/redis-fallback-circuit.js'
 import { DependencyHealthService } from './ha/dependency-health-service.js'
 import {
+  InstanceRoleCoordinator,
+  InstanceRoleHealthService,
+} from './ha/instance-role-service.js'
+import {
   KyselyPostgresMigrationSessionProvider,
   PostgresMigrationLock,
 } from './ha/postgres-migration-lock.js'
@@ -54,6 +58,7 @@ import { KyselyAuthRepository } from './metadata/kysely-auth-repository.js'
 import { KyselyConnectionRepository } from './metadata/kysely-connection-repository.js'
 import { KyselyDdlAuditRepository } from './metadata/kysely-ddl-audit-repository.js'
 import { KyselyKeepAliveEventRepository } from './metadata/kysely-keepalive-event-repository.js'
+import { KyselyInstanceRoleRepository } from './metadata/kysely-instance-role-repository.js'
 import { KyselyMutationAuditRepository } from './metadata/kysely-mutation-audit-repository.js'
 import { KyselyNativeAccountRepository } from './metadata/kysely-native-account-repository.js'
 import { KyselyQueryAuditRepository } from './metadata/kysely-query-audit-repository.js'
@@ -151,6 +156,7 @@ export interface RuntimeConfig {
   transferRoot?: string
   objectStorage?: TransferObjectStorageConfig
   redisUrl?: string
+  haInstanceId?: string
   staticRoot?: string
 }
 
@@ -193,6 +199,7 @@ type RuntimeErrorCode =
   | 'INVALID_MASTER_KEY'
   | 'INVALID_METADATA_URL'
   | 'INVALID_OBJECT_STORAGE'
+  | 'INVALID_HA_INSTANCE'
   | 'INVALID_REDIS_URL'
   | 'INVALID_PORT'
 
@@ -237,6 +244,14 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv | Record<string, string
 
   const production = env.NODE_ENV === 'production'
   const redisUrl = parseRedisUrl(env.DBWEB_REDIS_URL)
+  const haInstanceId = env.DBWEB_HA_INSTANCE_ID?.trim()
+  if (
+    haInstanceId
+    && (
+      metadata.kind !== 'postgres'
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(haInstanceId)
+    )
+  ) throw new RuntimeConfigError('INVALID_HA_INSTANCE')
   const transferRoot = resolve(env.DBWEB_TRANSFER_ROOT ?? './data/transfers')
   const objectStorage = parseObjectStorage(env, transferRoot)
   const staticRoot = env.DBWEB_WEB_ROOT
@@ -256,6 +271,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv | Record<string, string
     transferRoot,
     objectStorage,
     ...(redisUrl ? { redisUrl } : {}),
+    ...(haInstanceId ? { haInstanceId } : {}),
     ...(staticRoot ? { staticRoot } : {}),
   }
 }
@@ -319,6 +335,9 @@ export async function buildRuntime(
   config: RuntimeConfig,
   dependencies: RuntimeDependencies = {},
 ): Promise<FastifyInstance> {
+  if (config.haInstanceId && config.metadata.kind !== 'postgres') {
+    throw new RuntimeConfigError('INVALID_HA_INSTANCE')
+  }
   if (config.metadata.kind === 'sqlite' && config.metadata.filename !== ':memory:') {
     await mkdir(dirname(config.metadata.filename), { recursive: true })
   }
@@ -327,6 +346,7 @@ export async function buildRuntime(
   let nativeAccountScheduler: NativeAccountVerificationScheduler | undefined
   let transferCleanupScheduler: Pick<TransferCleanupScheduler, 'start' | 'stop'> | undefined
   let transferWorkerScheduler: Pick<TransferJobWorkerScheduler, 'start' | 'stop' | 'wake'> | undefined
+  let instanceRoleCoordinator: InstanceRoleCoordinator | undefined
   let redisServices: RedisRuntimeServices | undefined
   let s3Client: S3RuntimeClient | undefined
   const redisCircuit = config.redisUrl
@@ -835,7 +855,7 @@ export async function buildRuntime(
     const csrfSecret = createHmac('sha256', config.masterKey)
       .update('dbweb-csrf-v1')
       .digest()
-    const healthService = new DependencyHealthService({
+    const dependencyHealthService = new DependencyHealthService({
       metadata: async () => {
         await database.selectNoFrom(sql<number>`1`.as('ok')).executeTakeFirstOrThrow()
       },
@@ -846,6 +866,24 @@ export async function buildRuntime(
         : async () => { await access(objectStorage.root) },
       ...(redisCircuit ? { redisState: () => redisCircuit.status().state } : {}),
     })
+    if (config.haInstanceId) {
+      instanceRoleCoordinator = new InstanceRoleCoordinator(
+        new KyselyInstanceRoleRepository(database),
+        config.haInstanceId,
+        {
+          onRoleChange: async (role) => {
+            if (role === 'active') transferWorkerScheduler?.start()
+            else await transferWorkerScheduler?.stop()
+          },
+        },
+      )
+    }
+    const healthService = instanceRoleCoordinator
+      ? new InstanceRoleHealthService(
+        dependencyHealthService,
+        () => instanceRoleCoordinator!.status().role,
+      )
+      : dependencyHealthService
     const app = await buildApp({
       authService,
       connectionService,
@@ -871,11 +909,13 @@ export async function buildRuntime(
     keepAliveScheduler.start()
     nativeAccountScheduler.start()
     transferCleanupScheduler.start()
-    transferWorkerScheduler.start()
+    if (instanceRoleCoordinator) await instanceRoleCoordinator.start()
+    else transferWorkerScheduler.start()
     await redisServices?.transferWake.start(() => transferWorkerScheduler?.wake())
     app.addHook('onClose', async () => {
       await redisServices?.transferWake.close()
-      await transferWorkerScheduler?.stop()
+      if (instanceRoleCoordinator) await instanceRoleCoordinator.stop()
+      else await transferWorkerScheduler?.stop()
       await transferCleanupScheduler?.stop()
       await nativeAccountScheduler?.stop()
       await keepAliveScheduler.stop()
@@ -887,7 +927,8 @@ export async function buildRuntime(
     return app
   } catch (error) {
     await redisServices?.transferWake.close()
-    await transferWorkerScheduler?.stop()
+    if (instanceRoleCoordinator) await instanceRoleCoordinator.stop()
+    else await transferWorkerScheduler?.stop()
     await transferCleanupScheduler?.stop()
     await nativeAccountScheduler?.stop()
     await tunnelPool?.close()

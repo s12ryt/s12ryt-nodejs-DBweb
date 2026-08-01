@@ -60,6 +60,18 @@ describe('runtime', () => {
       .toBe('redis://cache.internal:6379')
     expect(() => loadRuntimeConfig({ ...base, DBWEB_REDIS_URL: 'https://invalid.test' }))
       .toThrow(new RuntimeConfigError('INVALID_REDIS_URL'))
+    expect(loadRuntimeConfig({
+      ...base,
+      DBWEB_METADATA_URL: 'postgres://dbweb:password@metadata:5432/dbweb',
+      DBWEB_HA_INSTANCE_ID: 'api-1',
+    }).haInstanceId).toBe('api-1')
+    expect(() => loadRuntimeConfig({ ...base, DBWEB_HA_INSTANCE_ID: 'api-1' }))
+      .toThrow(new RuntimeConfigError('INVALID_HA_INSTANCE'))
+    expect(() => loadRuntimeConfig({
+      ...base,
+      DBWEB_METADATA_URL: 'postgres://dbweb:password@metadata:5432/dbweb',
+      DBWEB_HA_INSTANCE_ID: 'invalid instance',
+    })).toThrow(new RuntimeConfigError('INVALID_HA_INSTANCE'))
   })
 
   it('驗證S3/MinIO object storage設定且未配置時保留filesystem', () => {
