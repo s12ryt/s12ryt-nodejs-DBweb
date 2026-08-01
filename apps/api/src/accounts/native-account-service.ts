@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { AuthUser } from '../auth/auth-types.js'
 import type { ConnectionService } from '../connections/connection-service.js'
 import type { DatabaseEngine, ResolvedConnection } from '../connections/connection-types.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import type { SecurityAuditAction, SecurityAuditRecorder } from '../security/security-audit.js'
 import type { NativeAccountCredentialVault } from './native-account-credential.js'
 import {
@@ -427,6 +428,7 @@ export class NativeAccountService {
         this.credentials.reveal(account.id, account.encryptedPassword),
       )
     } catch (error) {
+      if (error instanceof DatabaseOperationGateError) throw error
       const { retryVerificationAt: _retry, ...retained } = account
       void _retry
       const stale: StoredNativeAccount = {

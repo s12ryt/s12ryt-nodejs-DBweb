@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { AuthUser } from '../auth/auth-types.js'
 import type { ResolvedConnection } from '../connections/connection-types.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import { EnvelopeEncryption } from '../security/envelope-encryption.js'
 import type { SecurityAuditRecorder } from '../security/security-audit.js'
 import { NativeAccountCredentialVault } from './native-account-credential.js'
@@ -314,6 +315,23 @@ describe('NativeAccountService', () => {
       nextVerificationAt: '2026-07-31T06:00:00.000Z',
     })
     expect(await environment.repository.findById(created.account.id)).not.toHaveProperty('retryVerificationAt')
+  })
+
+  it('preserves managed credential state when manual verification is capacity limited', async () => {
+    const record = vi.fn<SecurityAuditRecorder['record']>(async () => undefined)
+    const environment = setup(vi.fn(async () => true), undefined, { record })
+    const created = await environment.service.create(admin, {
+      connectionId: 'connection-1', identity: { username: 'capacity-limited' }, confirmed: true,
+    })
+    record.mockClear()
+    const before = await environment.repository.findById(created.account.id)
+    const busy = new DatabaseOperationGateError('DATABASE_OPERATION_BUSY', true)
+    vi.mocked(environment.gateway.verifyCredential).mockRejectedValueOnce(busy)
+
+    await expect(environment.service.verifyNow(admin, created.account.id)).rejects.toBe(busy)
+
+    expect(await environment.repository.findById(created.account.id)).toEqual(before)
+    expect(record).not.toHaveBeenCalled()
   })
 
   it('audits native account lifecycle and password reveal without recording credentials', async () => {
