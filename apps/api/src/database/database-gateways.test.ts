@@ -46,14 +46,56 @@ describe('PostgresDatabaseGateway', () => {
       schema: 'odd"schema',
       table: 'order"items',
       limit: 20,
-      offset: 40,
+      pagination: { mode: 'offset', offset: 40 },
     })
 
     expect(query).toHaveBeenCalledWith(
       'SELECT * FROM "odd""schema"."order""items" LIMIT $1 OFFSET $2',
-      [20, 40],
+      [21, 40],
     )
     expect(client.end).toHaveBeenCalledOnce()
+  })
+
+  it('優先使用primary key並以參數化複合keyset向前分頁', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [
+        { key_name: 'orders_pkey', primary_key: true, column_name: 'tenant_id', ordinal_position: 1 },
+        { key_name: 'orders_pkey', primary_key: true, column_name: 'id', ordinal_position: 2 },
+      ] })
+      .mockResolvedValueOnce({
+        rows: [
+          { tenant_id: 'acme', id: 42 },
+          { tenant_id: 'acme', id: 43 },
+          { tenant_id: 'acme', id: 44 },
+        ],
+        fields: [{ name: 'tenant_id' }, { name: 'id' }],
+      })
+    const client = { connect: vi.fn(), query, end: vi.fn() }
+    const gateway = new PostgresDatabaseGateway(() => client)
+
+    await expect(gateway.findStableKey(connection, 'public', 'orders')).resolves.toEqual(['tenant_id', 'id'])
+    const page = await gateway.readRows(connection, {
+      schema: 'public',
+      table: 'orders',
+      limit: 2,
+      pagination: {
+        mode: 'keyset',
+        key: ['tenant_id', 'id'],
+        direction: 'forward',
+        values: ['acme', 41],
+      },
+    })
+
+    expect(query.mock.calls[1]).toEqual([
+      'SELECT * FROM "public"."orders" WHERE ("tenant_id" > $1) OR ("tenant_id" = $2 AND "id" > $3) ORDER BY "tenant_id" ASC, "id" ASC LIMIT $4',
+      ['acme', 'acme', 41, 3],
+    ])
+    expect(page).toMatchObject({
+      paginationMode: 'keyset',
+      rows: [{ tenant_id: 'acme', id: 42 }, { tenant_id: 'acme', id: 43 }],
+      previousCursor: expect.any(String),
+      nextCursor: expect.any(String),
+    })
   })
 
   it('透過 SSH channel 瀏覽並在完成後釋放', async () => {
@@ -81,15 +123,53 @@ describe('MysqlDatabaseGateway', () => {
         schema: 'odd`schema',
         table: 'order`items',
         limit: 20,
-        offset: 40,
+        pagination: { mode: 'offset', offset: 40 },
       }),
     ).rejects.toMatchObject({ message: 'DATABASE_CONNECTION_FAILED' })
 
     expect(query).toHaveBeenCalledWith(
       'SELECT * FROM `odd``schema`.`order``items` LIMIT ? OFFSET ?',
-      [20, 40],
+      [21, 40],
     )
     expect(client.end).toHaveBeenCalledOnce()
+  })
+
+  it('只選全部非空的unique key，並以反向keyset查詢後恢復顯示順序', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce([[{
+        key_name: 'uq_orders_code',
+        primary_key: 0,
+        column_name: 'code',
+        ordinal_position: 1,
+        nullable_column: 0,
+      }], []])
+      .mockResolvedValueOnce([[
+        { code: 'c' },
+        { code: 'b' },
+        { code: 'a' },
+      ], [{ name: 'code' }]])
+    const client = { query, end: vi.fn() }
+    const gateway = new MysqlDatabaseGateway(async () => client)
+    const mysqlConnection = { ...connection, engine: 'mysql' as const, port: 3306 }
+
+    await expect(gateway.findStableKey(mysqlConnection, 'app', 'orders')).resolves.toEqual(['code'])
+    const page = await gateway.readRows(mysqlConnection, {
+      schema: 'app',
+      table: 'orders',
+      limit: 2,
+      pagination: { mode: 'keyset', key: ['code'], direction: 'backward', values: ['d'] },
+    })
+
+    expect(query.mock.calls[1]).toEqual([
+      'SELECT * FROM `app`.`orders` WHERE (`code` < ?) ORDER BY `code` DESC LIMIT ?',
+      ['d', 3],
+    ])
+    expect(page).toMatchObject({
+      paginationMode: 'keyset',
+      rows: [{ code: 'b' }, { code: 'c' }],
+      previousCursor: expect.any(String),
+      nextCursor: expect.any(String),
+    })
   })
 
   it('透過 SSH channel 瀏覽並在失敗後仍釋放', async () => {
