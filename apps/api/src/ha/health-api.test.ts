@@ -59,4 +59,33 @@ describe('HA health API', () => {
     expect(ready.json()).toEqual({ status: 'not-ready', degraded: false })
     await app.close()
   })
+
+  it('公開active或standby角色但不洩漏instance識別資訊', async () => {
+    const app = await buildApp({
+      authService: auth(),
+      csrfSecret: Buffer.alloc(32, 1),
+      production: false,
+      healthService: {
+        check: async () => ({
+          ready: false,
+          degraded: false,
+          role: 'standby',
+          components: { metadata: 'up', objectStorage: 'up', redis: 'up' },
+        }),
+      },
+    })
+
+    const ready = await app.inject({ method: 'GET', url: '/api/health/ready' })
+    expect(ready.statusCode).toBe(503)
+    expect(ready.json()).toEqual({ status: 'not-ready', degraded: false, role: 'standby' })
+
+    const summary = await app.inject({ method: 'GET', url: '/api/health' })
+    expect(summary.json()).toEqual({
+      status: 'not-ready',
+      role: 'standby',
+      components: { metadata: 'up', objectStorage: 'up', redis: 'up' },
+    })
+    expect(JSON.stringify(summary.json())).not.toContain('instance')
+    await app.close()
+  })
 })

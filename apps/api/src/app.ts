@@ -630,12 +630,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return reply.code(health.ready ? 200 : 503).send({
         status: health.ready ? 'ready' : 'not-ready',
         degraded: health.degraded,
+        ...(health.role === undefined ? {} : { role: health.role }),
       })
     })
     app.get('/api/health', async () => {
       const health = await options.healthService!.check()
       return {
         status: health.ready ? health.degraded ? 'degraded' : 'ok' : 'not-ready',
+        ...(health.role === undefined ? {} : { role: health.role }),
         components: health.components,
       }
     })
