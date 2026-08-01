@@ -100,3 +100,4 @@
 - 2026-08-01：M6第一階段完成Redis circuit breaker、PG session revision權威驗證與Redis session cache、專用Pub/Sub subscriber、三態health，以及Redis失效時自動走PG的runtime組裝；Redis只加速，不成為權威狀態。
 - 2026-08-01：transfer工作改為明確execution request後才可由PG lease claim；60秒lease、20秒heartbeat、最多五次指數退避、Redis wake與30秒PG polling已組裝。取消後heartbeat立即失去租約，避免跨實例工作繼續執行。
 - 2026-08-01：PostgreSQL metadata migration以固定advisory lock序列化多實例啟動；新增AWS S3/MinIO相容chunk store，保留source/output/staging AAD隔離、SHA-256、冪等put、跨實例list/delete及可選SSE。S3 runtime設定與HeadBucket readiness已通過單元整合測試；真實Redis/PostgreSQL/MinIO多實例驗收仍待完成。
+- 2026-08-01：M6 HA 基礎以 18 筆原子提交推送；本機驗證為 128 個 Vitest 檔、488 tests 通過、14 個無外部服務 cases 略過，lint、strict typecheck、production build 與 Playwright 7 passed/2 responsive skipped 全綠。GitHub Actions run `30674344328` 的 quality、Docker、browser、PostgreSQL 9.6/17 與 MySQL 5.6/8.4 全部通過；真實 PostgreSQL + Redis + MinIO 多實例驗收仍待完成。

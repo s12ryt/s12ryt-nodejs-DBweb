@@ -99,3 +99,4 @@
 - 完成M6第一階段RED→GREEN：RedisFallbackCircuit、PG session authority revision、RedisSessionCache與duplicate subscriber runtime、live/ready/degraded health；Redis失效不影響PG權威session與readiness。
 - 完成PG權威transfer execution request、60秒lease/20秒heartbeat/五次指數退避、worker scheduler與Redis wake；preview本身不會被worker領取，取消job不能續租。HTTP HA模式只提交execution request並回202，不同步執行handler。
 - 完成PostgreSQL migration advisory lock與S3/MinIO相容加密chunk store；S3 conditional put保證冪等、用途namespace阻止密文跨區重用，runtime支援endpoint/region/path-style/default credentials或明確credentials/SSE及HeadBucket readiness。相關targeted tests、API strict typecheck與lint全綠，真實三實例Redis/PG/MinIO驗收尚待執行。
+- M6 HA 基礎以18筆English plain原子提交推送；本機完整回歸為128個Vitest檔、488 tests通過、14 cases略過，ESLint、workspace strict typecheck、production build及Playwright 7 passed/2 responsive skipped全綠。GitHub Actions run `30674344328` 的quality、Docker、三瀏覽器、PostgreSQL9.6/17與MySQL5.6/8.4全部通過；該run尚未啟動Redis/MinIO或多API實例，不能替代後續HA驗收。
