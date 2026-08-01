@@ -39,6 +39,19 @@ export interface SqlGateway {
   ): Promise<SqlGatewayResult>
 }
 
+export interface SqlStreamGateway {
+  stream(
+    connection: ResolvedConnection,
+    request: {
+      sql: string
+      timeoutMs: number
+      batchSize: number
+      signal: AbortSignal
+      readOnly: true
+    },
+  ): AsyncIterable<Record<string, unknown>>
+}
+
 export interface ExecuteQueryInput {
   queryId: string
   connectionId: string
@@ -46,6 +59,10 @@ export interface ExecuteQueryInput {
   timeoutMs?: number
   rowLimit?: number
   confirmedHighRisk?: boolean
+}
+
+export interface StreamQueryInput extends ExecuteQueryInput {
+  byteLimit?: number
 }
 
 type QueryErrorCode =
@@ -84,6 +101,7 @@ export class SqlQueryService {
     private readonly gateways: Record<DatabaseEngine, SqlGateway>,
     private readonly audit: QueryAuditRecorder,
     private readonly now: () => number = () => Date.now(),
+    private readonly streamGateways?: Record<DatabaseEngine, SqlStreamGateway>,
   ) {}
 
   async execute(
@@ -152,6 +170,89 @@ export class SqlQueryService {
     return true
   }
 
+  async *stream(
+    userId: string,
+    role: 'admin' | 'user',
+    input: StreamQueryInput,
+  ): AsyncIterable<string> {
+    const timeoutMs = input.timeoutMs ?? 30_000
+    const rowLimit = input.rowLimit ?? 100_000
+    const byteLimit = input.byteLimit ?? 256 * 1024 * 1024
+    this.validateStream(input, role, timeoutMs, rowLimit, byteLimit)
+    if (!isReadOnlySql(input.sql)) throw new QueryError('READ_ONLY_QUERY_REQUIRED')
+    if (!this.streamGateways || this.active.has(input.queryId)) throw new QueryError('INVALID_QUERY')
+
+    const connection = await this.connections.resolveConnection(input.connectionId)
+    const controller = new AbortController()
+    this.active.set(input.queryId, { userId, controller })
+    const startedAt = this.now()
+    const timer = setTimeout(
+      () => controller.abort(new QueryError('QUERY_TIMEOUT')),
+      timeoutMs,
+    )
+    timer.unref?.()
+    let rowCount = 0
+    let dataBytes = 0
+    let recorded = false
+
+    try {
+      yield stringifyNdjson({ type: 'meta', queryId: input.queryId })
+      let truncated = false
+      for await (const row of this.streamGateways[connection.engine].stream(connection, {
+        sql: input.sql,
+        timeoutMs,
+        batchSize: 1000,
+        signal: controller.signal,
+        readOnly: true,
+      })) {
+        if (rowCount >= rowLimit) {
+          truncated = true
+          break
+        }
+        const line = stringifyNdjson({ type: 'row', row })
+        const lineBytes = Buffer.byteLength(line)
+        if (dataBytes + lineBytes > byteLimit) {
+          truncated = true
+          break
+        }
+        dataBytes += lineBytes
+        rowCount += 1
+        yield line
+      }
+      await this.recordAudit(input, userId, startedAt, 'success', rowCount)
+      recorded = true
+      yield stringifyNdjson({
+        type: 'summary',
+        rowCount,
+        dataBytes,
+        truncated,
+        durationMs: Math.max(0, this.now() - startedAt),
+      })
+    } catch (error) {
+      if (error instanceof DatabaseOperationGateError) throw error
+      const queryError = controller.signal.reason instanceof QueryError
+        ? controller.signal.reason
+        : error instanceof QueryError
+          ? error
+          : new QueryError('QUERY_FAILED')
+      const status = queryError.code === 'QUERY_CANCELLED'
+        ? 'cancelled'
+        : queryError.code === 'QUERY_TIMEOUT'
+          ? 'timeout'
+          : 'failed'
+      await this.recordAudit(input, userId, startedAt, status, rowCount, queryError.code)
+      recorded = true
+      throw queryError
+    } finally {
+      clearTimeout(timer)
+      if (this.active.get(input.queryId)?.controller === controller) this.active.delete(input.queryId)
+      if (!recorded) {
+        controller.abort(new QueryError('QUERY_CANCELLED'))
+        await this.recordAudit(input, userId, startedAt, 'cancelled', rowCount, 'QUERY_CANCELLED')
+      }
+    }
+  }
+
   private validate(input: ExecuteQueryInput, timeoutMs: number, rowLimit: number) {
     if (
       !input.queryId.trim() ||
@@ -167,6 +268,32 @@ export class SqlQueryService {
     ) {
       throw new QueryError('INVALID_QUERY')
     }
+  }
+
+  private validateStream(
+    input: StreamQueryInput,
+    role: 'admin' | 'user',
+    timeoutMs: number,
+    rowLimit: number,
+    byteLimit: number,
+  ) {
+    const maximumRows = role === 'admin' ? 1_000_000 : 100_000
+    const maximumBytes = role === 'admin' ? 2 * 1024 * 1024 * 1024 : 256 * 1024 * 1024
+    if (
+      !input.queryId.trim()
+      || !input.connectionId.trim()
+      || !input.sql.trim()
+      || input.sql.length > 1_048_576
+      || !Number.isInteger(timeoutMs)
+      || timeoutMs < 100
+      || timeoutMs > 300_000
+      || !Number.isInteger(rowLimit)
+      || rowLimit < 1
+      || rowLimit > maximumRows
+      || !Number.isSafeInteger(byteLimit)
+      || byteLimit < 1
+      || byteLimit > maximumBytes
+    ) throw new QueryError('INVALID_QUERY')
   }
 
   private async recordAudit(
@@ -189,6 +316,15 @@ export class SqlQueryService {
       createdAt: new Date().toISOString(),
     })
   }
+}
+
+function stringifyNdjson(value: unknown): string {
+  return `${JSON.stringify(value, (_key, entry: unknown) => {
+    if (typeof entry === 'bigint') return { $bigint: entry.toString() }
+    if (entry instanceof Date) return entry.toISOString()
+    if (Buffer.isBuffer(entry)) return { $binary: entry.toString('base64') }
+    return entry
+  })}\n`
 }
 
 export function isHighRiskSql(sql: string): boolean {

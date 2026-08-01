@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import { ConnectionService } from '../connections/connection-service.js'
@@ -10,6 +12,7 @@ import {
   SqlQueryService,
   type QueryAuditRecorder,
   type SqlGateway,
+  type SqlStreamGateway,
 } from './sql-query-service.js'
 
 async function setup(gatewayOverrides: Partial<SqlGateway> = {}) {
@@ -40,10 +43,18 @@ async function setup(gatewayOverrides: Partial<SqlGateway> = {}) {
   const audit: QueryAuditRecorder = { record: vi.fn(async () => undefined) }
   return {
     service: new SqlQueryService(connections, { postgres: gateway, mysql: gateway }, audit),
+    connections,
+    gateways: { postgres: gateway, mysql: gateway },
     profile,
     gateway,
     audit,
   }
+}
+
+async function collectAsync<T>(source: AsyncIterable<T>): Promise<T[]> {
+  const values: T[] = []
+  for await (const value of source) values.push(value)
+  return values
 }
 
 describe('SqlQueryService', () => {
@@ -172,5 +183,98 @@ describe('SqlQueryService', () => {
       connectionId: profile.id,
       sql: 'SELECT 1',
     })).rejects.toBe(busy)
+  })
+
+  it('以同一active query串流NDJSON並由既有cancel中止', async () => {
+    const stream = vi.fn(async function* (_connection, request) {
+      yield { id: 1n, note: '' }
+      if (request.signal.aborted) throw request.signal.reason
+      await new Promise<never>((_resolve, reject) => {
+        request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true })
+      })
+    })
+    const { connections, gateways, profile, audit } = await setup()
+    const streaming = new SqlQueryService(
+      connections,
+      gateways,
+      audit,
+      undefined,
+      { postgres: { stream }, mysql: { stream } },
+    )
+    const iterator = streaming.stream('reader-1', 'user', {
+      queryId: '88888888-8888-4888-8888-888888888888',
+      connectionId: profile.id,
+      sql: 'SELECT id, note FROM reports',
+    })[Symbol.asyncIterator]()
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: expect.stringContaining('"type":"meta"'),
+    })
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: '{"type":"row","row":{"id":{"$bigint":"1"},"note":""}}\n',
+    })
+    await expect(streaming.cancel('reader-1', '88888888-8888-4888-8888-888888888888')).resolves.toBe(true)
+    await expect(iterator.next()).rejects.toEqual(new QueryError('QUERY_CANCELLED'))
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled', rowCount: 1 }))
+  })
+
+  it('一般使用者不可超過100k列或256MiB，管理員上限為1m列與2GiB', async () => {
+    const streamGateway: SqlStreamGateway = { stream: vi.fn(async function* () {}) }
+    const { connections, gateways, profile, audit } = await setup()
+    const streaming = new SqlQueryService(
+      connections,
+      gateways,
+      audit,
+      undefined,
+      { postgres: streamGateway, mysql: streamGateway },
+    )
+
+    for (const input of [
+      { rowLimit: 100_001 },
+      { byteLimit: 256 * 1024 * 1024 + 1 },
+    ]) {
+      await expect(collectAsync(streaming.stream('reader-1', 'user', {
+        queryId: randomUUID(), connectionId: profile.id, sql: 'SELECT 1', ...input,
+      }))).rejects.toEqual(new QueryError('INVALID_QUERY'))
+    }
+    await expect(collectAsync(streaming.stream('admin-1', 'admin', {
+      queryId: randomUUID(), connectionId: profile.id, sql: 'SELECT 1',
+      rowLimit: 1_000_000, byteLimit: 2 * 1024 * 1024 * 1024,
+    }))).resolves.toEqual([
+      expect.stringContaining('"type":"meta"'),
+      expect.stringContaining('"type":"summary"'),
+    ])
+  })
+
+  it('達到byte limit時不buffer後續列並輸出truncated摘要', async () => {
+    let produced = 0
+    const streamGateway: SqlStreamGateway = {
+      stream: vi.fn(async function* () {
+        while (produced < 10) {
+          produced += 1
+          yield { value: 'x'.repeat(20) }
+        }
+      }),
+    }
+    const { connections, gateways, profile, audit } = await setup()
+    const streaming = new SqlQueryService(
+      connections,
+      gateways,
+      audit,
+      undefined,
+      { postgres: streamGateway, mysql: streamGateway },
+    )
+    const lines = await collectAsync(streaming.stream('reader-1', 'user', {
+      queryId: '99999999-9999-4999-8999-999999999999',
+      connectionId: profile.id,
+      sql: 'SELECT value FROM reports',
+      byteLimit: 80,
+    }))
+
+    expect(produced).toBeLessThan(10)
+    expect(lines.at(-1)).toContain('"truncated":true')
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ status: 'success' }))
   })
 })
