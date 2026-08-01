@@ -1,0 +1,129 @@
+x-api-environment: &api-environment
+  DBWEB_MASTER_KEY: ${DBWEB_MASTER_KEY:?Set DBWEB_MASTER_KEY to a base64-encoded 32-byte key}
+  DBWEB_ADMIN_USERNAME: ${DBWEB_ADMIN_USERNAME:-admin}
+  DBWEB_ADMIN_PASSWORD: ${DBWEB_ADMIN_PASSWORD:?Set a bootstrap password of at least 12 characters}
+  DBWEB_METADATA_URL: postgres://dbweb:${DBWEB_POSTGRES_PASSWORD:-dbweb-metadata-password}@postgres:5432/dbweb
+  DBWEB_METADATA_MAX_CONNECTIONS: 10
+  DBWEB_REDIS_URL: redis://redis:6379
+  DBWEB_S3_BUCKET: dbweb-transfers
+  DBWEB_S3_REGION: us-east-1
+  DBWEB_S3_ENDPOINT: http://minio:9000
+  DBWEB_S3_FORCE_PATH_STYLE: "true"
+  DBWEB_S3_ACCESS_KEY_ID: ${DBWEB_MINIO_ACCESS_KEY:-dbweb-minio}
+  DBWEB_S3_SECRET_ACCESS_KEY: ${DBWEB_MINIO_SECRET_KEY:-dbweb-minio-secret}
+
+x-api-common: &api-common
+  build:
+    context: .
+  image: dbweb:ha
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: dbweb
+      POSTGRES_USER: dbweb
+      POSTGRES_PASSWORD: ${DBWEB_POSTGRES_PASSWORD:-dbweb-metadata-password}
+    volumes:
+      - dbweb-ha-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbweb -d dbweb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - dbweb-ha-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-03-30T09-41-56Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${DBWEB_MINIO_ACCESS_KEY:-dbweb-minio}
+      MINIO_ROOT_PASSWORD: ${DBWEB_MINIO_SECRET_KEY:-dbweb-minio-secret}
+    volumes:
+      - dbweb-ha-minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  minio-init:
+    image: dbweb:ha
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      DBWEB_S3_ENDPOINT: http://minio:9000
+      DBWEB_S3_ACCESS_KEY_ID: ${DBWEB_MINIO_ACCESS_KEY:-dbweb-minio}
+      DBWEB_S3_SECRET_ACCESS_KEY: ${DBWEB_MINIO_SECRET_KEY:-dbweb-minio-secret}
+    volumes:
+      - ./deploy/create-s3-bucket.mjs:/app/create-s3-bucket.mjs:ro
+    command: ["node", "/app/create-s3-bucket.mjs"]
+    restart: "no"
+
+  api-1:
+    <<: *api-common
+    environment:
+      <<: *api-environment
+      DBWEB_HA_INSTANCE_ID: api-1
+
+  api-2:
+    <<: *api-common
+    environment:
+      <<: *api-environment
+      DBWEB_HA_INSTANCE_ID: api-2
+
+  api-3:
+    <<: *api-common
+    environment:
+      <<: *api-environment
+      DBWEB_HA_INSTANCE_ID: api-3
+
+  haproxy:
+    image: haproxy:3.1-alpine
+    depends_on:
+      - api-1
+      - api-2
+      - api-3
+    ports:
+      - "${DBWEB_PORT:-3000}:8080"
+    volumes:
+      - ./deploy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  dbweb-ha-postgres:
+  dbweb-ha-redis:
+  dbweb-ha-minio:
