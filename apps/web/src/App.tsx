@@ -1112,6 +1112,7 @@ function DataBrowser({ connectionId, locale, csrfToken, isAdmin }: { connectionI
   const [columns, setColumns] = useState<DatabaseColumn[]>([])
   const [page, setPage] = useState<RowPage>()
   const [offset, setOffset] = useState(0)
+  const [cursor, setCursor] = useState<string>()
   const [view, setView] = useState<'rows' | 'columns'>('rows')
   const [error, setError] = useState('')
   const [inspection, setInspection] = useState<DataMutationInspection>()
@@ -1137,7 +1138,7 @@ function DataBrowser({ connectionId, locale, csrfToken, isAdmin }: { connectionI
   }, [connectionId, locale, schema])
 
   useEffect(() => {
-    setOffset(0); setPage(undefined); setColumns([]); setInspection(undefined); setSelectedRows(new Set())
+    setOffset(0); setCursor(undefined); setPage(undefined); setColumns([]); setInspection(undefined); setSelectedRows(new Set())
   }, [table])
 
   useEffect(() => {
@@ -1145,7 +1146,7 @@ function DataBrowser({ connectionId, locale, csrfToken, isAdmin }: { connectionI
     const base = `/api/connections/${encodeURIComponent(connectionId)}/schemas/${encodeURIComponent(schema)}/tables/${encodeURIComponent(table)}`
     void Promise.all([
       apiRequest<DatabaseColumn[]>(`${base}/columns`, { locale }),
-      apiRequest<RowPage>(`${base}/rows?limit=100&offset=${offset}`, { locale }),
+      apiRequest<RowPage>(`${base}/rows?limit=100&${cursor ? `cursor=${encodeURIComponent(cursor)}` : `offset=${offset}`}`, { locale }),
     ]).then(([nextColumns, nextPage]) => { setColumns(nextColumns); setPage(nextPage) })
       .catch((cause) => setError(errorMessage(cause)))
     if (isAdmin) {
@@ -1153,7 +1154,7 @@ function DataBrowser({ connectionId, locale, csrfToken, isAdmin }: { connectionI
         .then(setInspection)
         .catch(() => setInspection(undefined))
     }
-  }, [connectionId, isAdmin, locale, offset, refresh, schema, table])
+  }, [connectionId, cursor, isAdmin, locale, offset, refresh, schema, table])
 
   const mutationBase = schema && table ? `/api/connections/${encodeURIComponent(connectionId)}/schemas/${encodeURIComponent(schema)}/tables/${encodeURIComponent(table)}/mutations` : ''
   async function mutate(operations: unknown[]) {
@@ -1183,7 +1184,7 @@ function DataBrowser({ connectionId, locale, csrfToken, isAdmin }: { connectionI
         {error && <div className="inline-error" role="alert">{error}</div>}
         <div className="surface-toolbar">
           <div className="segmented"><button type="button" className={view === 'rows' ? 'active' : ''} onClick={() => setView('rows')}><Table2 size={15} />{t('rows')}</button><button type="button" className={view === 'columns' ? 'active' : ''} onClick={() => setView('columns')}><Columns3 size={15} />{t('columns')}</button></div>
-          {view === 'rows' && <div className="row-toolbar">{inspection && <><button className="secondary-button compact-command" type="button" onClick={() => setMutationMode('insert')}><Plus size={15} />{t('createRow')}</button>{selected.length > 0 && inspection.policy.canUpdate && <button className="secondary-button compact-command" type="button" onClick={() => setMutationMode('batch')}>{t('batchEdit')} {selected.length} {t('rowUnit')}</button>}</>}<div className="pager"><IconButton label={t('previousPage')} disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 100))}><ChevronLeft size={17} /></IconButton><span>{offset + 1}–{offset + (page?.rows.length ?? 0)}</span><IconButton label={t('nextPage')} disabled={page?.nextOffset === null || !page} onClick={() => setOffset(page?.nextOffset ?? offset)}><ChevronRight size={17} /></IconButton></div></div>}
+          {view === 'rows' && <div className="row-toolbar">{inspection && <><button className="secondary-button compact-command" type="button" onClick={() => setMutationMode('insert')}><Plus size={15} />{t('createRow')}</button>{selected.length > 0 && inspection.policy.canUpdate && <button className="secondary-button compact-command" type="button" onClick={() => setMutationMode('batch')}>{t('batchEdit')} {selected.length} {t('rowUnit')}</button>}</>}{page?.warning === 'OFFSET_PAGINATION' && <span className="pagination-warning">{t('offsetPaginationWarning')}</span>}<div className="pager"><IconButton label={t('previousPage')} disabled={page?.paginationMode === 'keyset' ? !page.previousCursor : offset === 0} onClick={() => { if (page?.paginationMode === 'keyset') setCursor(page.previousCursor ?? undefined); else setOffset(Math.max(0, offset - 100)) }}><ChevronLeft size={17} /></IconButton><span>{page?.paginationMode === 'keyset' ? page.rows.length : `${offset + 1}–${offset + (page?.rows.length ?? 0)}`}</span><IconButton label={t('nextPage')} disabled={!page || (page.paginationMode === 'keyset' ? !page.nextCursor : page.nextOffset == null)} onClick={() => { if (page?.paginationMode === 'keyset') setCursor(page.nextCursor ?? undefined); else setOffset(page?.nextOffset ?? offset) }}><ChevronRight size={17} /></IconButton></div></div>}
         </div>
         {view === 'rows' ? <DataTable columns={page?.columns ?? []} rows={page?.rows ?? []} empty={t('noRows')} {...(inspection?.policy.identity ? { mutation: { selectedRows, setSelectedRows, canUpdate: inspection.policy.canUpdate, canDelete: inspection.policy.canDelete, rowLabel, edit: setEditingRow, remove: setDeletingRow, t } } : {})} /> : <ColumnTable columns={columns} />}
       </section>

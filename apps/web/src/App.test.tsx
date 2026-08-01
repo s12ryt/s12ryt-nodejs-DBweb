@@ -226,6 +226,65 @@ describe('DBWeb application shell', () => {
     expect(calls.filter((url) => url === '/api/connections')).toHaveLength(1)
   })
 
+  it('uses server keyset cursors for forward and backward row navigation', async () => {
+    const rowRequests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json(['public'])
+      if (url.endsWith('/tables')) return Response.json([{ schema: 'public', name: 'products', type: 'table' }])
+      if (url.endsWith('/columns')) return Response.json([{ name: 'id', dataType: 'integer', nullable: false, primaryKey: true }])
+      if (url.includes('/rows?')) {
+        rowRequests.push(url)
+        if (url.includes('cursor=next-cursor')) {
+          return Response.json({
+            columns: ['id'], rows: [{ id: 2 }], paginationMode: 'keyset',
+            nextCursor: null, previousCursor: 'previous-cursor',
+          })
+        }
+        return Response.json({
+          columns: ['id'], rows: [{ id: 1 }], paginationMode: 'keyset',
+          nextCursor: 'next-cursor', previousCursor: null,
+        })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText('Primary PostgreSQL'))
+    expect(await screen.findByRole('cell', { name: '1' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '下一頁' }))
+    expect(await screen.findByRole('cell', { name: '2' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '上一頁' }))
+
+    await waitFor(() => expect(rowRequests.some((url) => url.includes('cursor=previous-cursor'))).toBe(true))
+    expect(rowRequests.some((url) => url.includes('cursor=next-cursor'))).toBe(true)
+  })
+
+  it('warns when row browsing falls back to bounded offset pagination', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url === '/api/auth/me') return Response.json(authenticatedSession)
+      if (url === '/api/connections') return Response.json([connection])
+      if (url.endsWith('/schemas')) return Response.json(['public'])
+      if (url.endsWith('/tables')) return Response.json([{ schema: 'public', name: 'logs', type: 'table' }])
+      if (url.endsWith('/columns')) return Response.json([{ name: 'message', dataType: 'text', nullable: true, primaryKey: false }])
+      if (url.includes('/rows?')) return Response.json({
+        columns: ['message'], rows: [{ message: 'entry' }], paginationMode: 'offset',
+        nextOffset: null, warning: 'OFFSET_PAGINATION',
+      })
+      return new Response(null, { status: 404 })
+    }))
+    const user = userEvent.setup()
+
+    render(<App />)
+    await user.click(await screen.findByText('Primary PostgreSQL'))
+
+    expect(await screen.findByText('此資料表沒有穩定唯一鍵，深頁分頁可能較慢')).toBeVisible()
+  })
+
   it('requires confirmation before submitting high-risk SQL', async () => {
     let queryAttempts = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
