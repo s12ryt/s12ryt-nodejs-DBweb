@@ -125,7 +125,11 @@ export interface DatabaseColumn {
 export interface RowPage {
   columns: string[]
   rows: Array<Record<string, unknown>>
-  nextOffset: number | null
+  paginationMode?: 'keyset' | 'offset'
+  nextOffset?: number | null
+  nextCursor?: string | null
+  previousCursor?: string | null
+  warning?: 'OFFSET_PAGINATION'
 }
 
 export type DatabaseValueType = 'array' | 'bigint' | 'binary' | 'boolean' | 'date' | 'datetime' | 'decimal' | 'enum' | 'json' | 'number' | 'string' | 'time' | 'timestamptz' | 'uuid'
