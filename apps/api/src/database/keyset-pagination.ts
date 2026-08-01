@@ -30,6 +30,7 @@ export function decodeKeysetCursor(value: string, expectedKey: string[]): Keyset
     if (parsed.v !== 1 || !sameKeys(Object.keys(parsed), ['v', 'key', 'values', 'direction'])) {
       throw new KeysetPaginationError()
     }
+    if (JSON.stringify(parsed) !== decoded) throw new KeysetPaginationError()
     const cursor = {
       key: parsed.key,
       values: parsed.values,
