@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ConnectionService } from '../connections/connection-service.js'
 import { MemoryConnectionRepository } from '../connections/memory-connection-repository.js'
 import { EnvelopeEncryption } from '../security/envelope-encryption.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import {
   DataMutationError,
   DataMutationService,
@@ -126,6 +127,22 @@ describe('DataMutationService', () => {
       profile.id,
     )
     expect(gateway.executeTransaction).toHaveBeenCalledOnce()
+  })
+
+  it('保留可重試的資料庫操作忙碌錯誤', async () => {
+    const { service, gateway, profile } = await setup()
+    const busy = new DatabaseOperationGateError('DATABASE_OPERATION_BUSY', true)
+    vi.mocked(gateway.executeTransaction).mockRejectedValueOnce(busy)
+
+    await expect(service.mutate({ id: 'admin-1', role: 'admin' }, {
+      connectionId: profile.id,
+      schema: 'public',
+      table: 'orders',
+      operations: [{
+        kind: 'insert',
+        values: { status: { kind: 'value', type: 'string', value: 'new' } },
+      }],
+    })).rejects.toBe(busy)
   })
 
   it('將最多 100 筆新增、個別更新與共用 patch 在一次交易中執行', async () => {

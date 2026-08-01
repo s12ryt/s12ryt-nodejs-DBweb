@@ -1,5 +1,6 @@
 import type { ConnectionService } from '../connections/connection-service.js'
 import type { DatabaseEngine, ResolvedConnection } from '../connections/connection-types.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import {
   buildRowWritePolicy,
   RowWritePolicyError,
@@ -180,6 +181,7 @@ export class DataMutationService {
       await this.recordAudit(actor.id, input, operationCount, result.affectedRows, 'success', sqlTemplates)
       return result
     } catch (error) {
+      if (error instanceof DatabaseOperationGateError) throw error
       const mutationError =
         error instanceof DataMutationError ? error : new DataMutationError('MUTATION_FAILED')
       await this.recordAudit(actor.id, input, operationCount, 0, 'failed', sqlTemplates, mutationError.code)
