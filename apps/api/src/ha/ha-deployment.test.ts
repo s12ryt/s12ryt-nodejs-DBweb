@@ -44,4 +44,12 @@ describe('HA deployment configuration', () => {
     expect(workflow).toContain('steady=600')
     expect(workflow).toContain('performance-compare.ts')
   })
+
+  it('keeps required Compose configuration available to unconditional cleanup', async () => {
+    const workflow = await readFile('.github/workflows/performance.yml', 'utf8')
+
+    expect(workflow).toContain('timeout-minutes: 55\n    env:')
+    expect(workflow).toContain('DBWEB_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=')
+    expect(workflow).toContain('DBWEB_ADMIN_PASSWORD: performance-admin-password')
+  })
 })

@@ -22,6 +22,15 @@ jobs:
   relative-performance:
     runs-on: ubuntu-latest
     timeout-minutes: 55
+    env:
+      DBWEB_PORT: 3000
+      DBWEB_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      DBWEB_ADMIN_PASSWORD: performance-admin-password
+      DBWEB_POSTGRES_PASSWORD: performance-postgres-password
+      DBWEB_MINIO_ACCESS_KEY: performance-minio
+      DBWEB_MINIO_SECRET_KEY: performance-minio-password
+      DBWEB_PERFORMANCE_ADMIN_PASSWORD: performance-admin-password
+      DBWEB_PERFORMANCE_DATABASE_PASSWORD: performance-postgres-password
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,14 +75,6 @@ jobs:
       - name: Run baseline
         env:
           DBWEB_IMAGE: dbweb:perf-baseline
-          DBWEB_PORT: 3000
-          DBWEB_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-          DBWEB_ADMIN_PASSWORD: performance-admin-password
-          DBWEB_POSTGRES_PASSWORD: performance-postgres-password
-          DBWEB_MINIO_ACCESS_KEY: performance-minio
-          DBWEB_MINIO_SECRET_KEY: performance-minio-password
-          DBWEB_PERFORMANCE_ADMIN_PASSWORD: performance-admin-password
-          DBWEB_PERFORMANCE_DATABASE_PASSWORD: performance-postgres-password
         shell: bash
         run: |
           docker compose --project-name dbweb-perf --file compose.ha.yaml up --detach --no-build
@@ -93,14 +94,6 @@ jobs:
       - name: Run candidate
         env:
           DBWEB_IMAGE: dbweb:perf-candidate
-          DBWEB_PORT: 3000
-          DBWEB_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-          DBWEB_ADMIN_PASSWORD: performance-admin-password
-          DBWEB_POSTGRES_PASSWORD: performance-postgres-password
-          DBWEB_MINIO_ACCESS_KEY: performance-minio
-          DBWEB_MINIO_SECRET_KEY: performance-minio-password
-          DBWEB_PERFORMANCE_ADMIN_PASSWORD: performance-admin-password
-          DBWEB_PERFORMANCE_DATABASE_PASSWORD: performance-postgres-password
         shell: bash
         run: |
           docker compose --project-name dbweb-perf --file compose.ha.yaml up --detach --no-build
