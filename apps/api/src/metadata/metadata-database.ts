@@ -183,6 +183,18 @@ interface TransferJobLockTable {
   revision: number
 }
 
+interface HaInstanceLockTable {
+  id: number
+  revision: number
+}
+
+interface HaInstanceLeasesTable {
+  instance_id: string
+  role: 'active' | 'standby'
+  lease_expires_at: string
+  updated_at: string
+}
+
 interface TransferJobsTable {
   id: string
   owner_id: string
@@ -249,6 +261,8 @@ export interface MetadataDatabase {
   transfer_jobs: TransferJobsTable
   transfer_audits: TransferAuditsTable
   transfer_preview_plans: TransferPreviewPlansTable
+  ha_instance_lock: HaInstanceLockTable
+  ha_instance_leases: HaInstanceLeasesTable
   web_access_assignments: WebAccessAssignmentsTable
 }
 
@@ -445,6 +459,27 @@ export async function migrateMetadata(database: MetadataKysely): Promise<void> {
     .insertInto('transfer_job_lock')
     .values({ id: 1, revision: 0 })
     .onConflict((conflict) => conflict.column('id').doNothing())
+    .execute()
+
+  await database.schema
+    .createTable('ha_instance_lock')
+    .ifNotExists()
+    .addColumn('id', 'integer', (column) => column.primaryKey())
+    .addColumn('revision', 'integer', (column) => column.notNull())
+    .execute()
+  await database
+    .insertInto('ha_instance_lock')
+    .values({ id: 1, revision: 0 })
+    .onConflict((conflict) => conflict.column('id').doNothing())
+    .execute()
+
+  await database.schema
+    .createTable('ha_instance_leases')
+    .ifNotExists()
+    .addColumn('instance_id', 'varchar(100)', (column) => column.primaryKey())
+    .addColumn('role', 'varchar(16)', (column) => column.notNull())
+    .addColumn('lease_expires_at', 'varchar(35)', (column) => column.notNull())
+    .addColumn('updated_at', 'varchar(35)', (column) => column.notNull())
     .execute()
 
   await database.schema
