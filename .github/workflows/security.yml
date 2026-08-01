@@ -1,0 +1,45 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Audit high and critical vulnerabilities
+        run: pnpm audit --audit-level high
+      - name: Generate CycloneDX SBOM
+        run: npx --yes @cyclonedx/cdxgen@12.8.2 -t pnpm -o sbom.cdx.json
+      - name: Scan tracked Git history for secrets
+        run: >-
+          docker run --rm --volume "$PWD:/repo" --workdir /repo
+          ghcr.io/gitleaks/gitleaks:v8.30.1 git --redact --no-banner
+      - name: Verify hardened production container
+        shell: bash
+        run: |
+          docker build --tag dbweb:security .
+          test "$(docker inspect --format '{{.Config.User}}' dbweb:security)" = "node"
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --entrypoint node dbweb:security -e "process.stdout.write(process.getuid() === 0 ? 'root' : 'nonroot')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cyclonedx-sbom
+          path: sbom.cdx.json
+          if-no-files-found: error
