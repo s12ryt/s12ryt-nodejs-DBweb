@@ -88,7 +88,9 @@ import {
   type MetadataDatabaseConfig,
 } from './metadata/metadata-database.js'
 import { MysqlSqlGateway } from './query/mysql-sql-gateway.js'
+import { MysqlSqlStreamGateway } from './query/mysql-sql-stream-gateway.js'
 import { PostgresSqlGateway } from './query/postgres-sql-gateway.js'
+import { PostgresSqlStreamGateway } from './query/postgres-sql-stream-gateway.js'
 import { SqlQueryService } from './query/sql-query-service.js'
 import { EnvelopeEncryption } from './security/envelope-encryption.js'
 import { EncryptedSecurityAuditRecorder } from './security/security-audit.js'
@@ -505,6 +507,17 @@ export async function buildRuntime(
       connectionService,
       sqlGateways,
       audit,
+      undefined,
+      {
+        postgres: gateAsyncIterableGateway(
+          new PostgresSqlStreamGateway(undefined, undefined, socketProvider),
+          databaseOperationGate,
+        ),
+        mysql: gateAsyncIterableGateway(
+          new MysqlSqlStreamGateway(undefined, undefined, socketProvider),
+          databaseOperationGate,
+        ),
+      },
     )
     const nativeAccountRepository = new KyselyNativeAccountRepository(database)
     const nativeAccountCredentials = new NativeAccountCredentialVault(encryption)
