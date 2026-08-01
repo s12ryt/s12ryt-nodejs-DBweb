@@ -39,6 +39,15 @@ import { DdlService } from './ddl/ddl-service.js'
 import { MysqlDdlGateway } from './ddl/mysql-ddl-gateway.js'
 import { PostgresDdlGateway } from './ddl/postgres-ddl-gateway.js'
 import { RetainedKeepAliveRecorder } from './keepalive/keepalive-event.js'
+import {
+  gateAsyncIterableGateway,
+  gateOperationGateway,
+  gateSessionFactory,
+} from './ha/database-operation-adapters.js'
+import {
+  DatabaseOperationGate,
+  DatabaseOperationLeaseService,
+} from './ha/database-operation-gate.js'
 import { RedisFallbackCircuit } from './ha/redis-fallback-circuit.js'
 import { DependencyHealthService } from './ha/dependency-health-service.js'
 import {
@@ -56,6 +65,7 @@ import {
 import { KeepAliveScheduler, SqlKeepAliveService } from './keepalive/sql-keepalive-service.js'
 import { KyselyAuthRepository } from './metadata/kysely-auth-repository.js'
 import { KyselyConnectionRepository } from './metadata/kysely-connection-repository.js'
+import { KyselyDatabaseOperationLeaseRepository } from './metadata/kysely-database-operation-lease-repository.js'
 import { KyselyDdlAuditRepository } from './metadata/kysely-ddl-audit-repository.js'
 import { KyselyKeepAliveEventRepository } from './metadata/kysely-keepalive-event-repository.js'
 import { KyselyInstanceRoleRepository } from './metadata/kysely-instance-role-repository.js'
@@ -191,6 +201,7 @@ export interface RuntimeDependencies {
     worker: TransferJobWorker,
   ) => Pick<TransferJobWorkerScheduler, 'start' | 'stop' | 'wake'>
   createS3Client?: (config: S3ClientConfig) => S3RuntimeClient
+  databaseOperationGate?: DatabaseOperationGate
 }
 
 type RuntimeErrorCode =
@@ -407,8 +418,18 @@ export async function buildRuntime(
       .digest()
     tunnelPool = new SshTunnelPool(transportFactory, credentialKey)
     const socketProvider = new TunnelDatabaseSocketProvider(tunnelPool)
-    const postgresConnector = new PostgresConnector(undefined, undefined, socketProvider)
-    const mysqlConnector = new MysqlConnector(undefined, undefined, socketProvider)
+    const databaseOperationGate = dependencies.databaseOperationGate ?? new DatabaseOperationGate(
+      new DatabaseOperationLeaseService(new KyselyDatabaseOperationLeaseRepository(database)),
+      config.haInstanceId ?? randomUUID(),
+    )
+    const postgresConnector = gateOperationGateway(
+      new PostgresConnector(undefined, undefined, socketProvider),
+      databaseOperationGate,
+    )
+    const mysqlConnector = gateOperationGateway(
+      new MysqlConnector(undefined, undefined, socketProvider),
+      databaseOperationGate,
+    )
     const connectionService = new ConnectionService(
       new KyselyConnectionRepository(database),
       encryption,
@@ -418,15 +439,27 @@ export async function buildRuntime(
       new KyselyWebAccessRepository(database),
       securityAudit,
     )
-    const postgresDatabase = new PostgresDatabaseGateway(undefined, socketProvider)
-    const mysqlDatabase = new MysqlDatabaseGateway(undefined, socketProvider)
+    const postgresDatabase = gateOperationGateway(
+      new PostgresDatabaseGateway(undefined, socketProvider),
+      databaseOperationGate,
+    )
+    const mysqlDatabase = gateOperationGateway(
+      new MysqlDatabaseGateway(undefined, socketProvider),
+      databaseOperationGate,
+    )
     const databaseExplorer = new DatabaseExplorer(connectionService, {
       postgres: postgresDatabase,
       mysql: mysqlDatabase,
     })
     const dataMutationGateways = {
-      postgres: new PostgresDataMutationGateway(undefined, socketProvider),
-      mysql: new MysqlDataMutationGateway(undefined, socketProvider),
+      postgres: gateOperationGateway(
+        new PostgresDataMutationGateway(undefined, socketProvider),
+        databaseOperationGate,
+      ),
+      mysql: gateOperationGateway(
+        new MysqlDataMutationGateway(undefined, socketProvider),
+        databaseOperationGate,
+      ),
     }
     const dataMutationService = new DataMutationService(
       connectionService,
@@ -441,8 +474,14 @@ export async function buildRuntime(
     const ddlService = new DdlService(
       connectionService,
       {
-        postgres: new PostgresDdlGateway(undefined, socketProvider),
-        mysql: new MysqlDdlGateway(undefined, socketProvider),
+        postgres: gateOperationGateway(
+          new PostgresDdlGateway(undefined, socketProvider),
+          databaseOperationGate,
+        ),
+        mysql: gateOperationGateway(
+          new MysqlDdlGateway(undefined, socketProvider),
+          databaseOperationGate,
+        ),
       },
       new EncryptedDdlAuditRecorder(new KyselyDdlAuditRepository(database), encryption),
       undefined,
@@ -453,8 +492,14 @@ export async function buildRuntime(
       encryption,
     )
     const sqlGateways = {
-      postgres: new PostgresSqlGateway(undefined, socketProvider),
-      mysql: new MysqlSqlGateway(undefined, socketProvider),
+      postgres: gateOperationGateway(
+        new PostgresSqlGateway(undefined, socketProvider),
+        databaseOperationGate,
+      ),
+      mysql: gateOperationGateway(
+        new MysqlSqlGateway(undefined, socketProvider),
+        databaseOperationGate,
+      ),
     }
     const queryService = new SqlQueryService(
       connectionService,
@@ -464,8 +509,14 @@ export async function buildRuntime(
     const nativeAccountRepository = new KyselyNativeAccountRepository(database)
     const nativeAccountCredentials = new NativeAccountCredentialVault(encryption)
     const nativeAccountGateways = {
-      postgres: new PostgresNativeAccountGateway(undefined, socketProvider),
-      mysql: new MysqlNativeAccountGateway(undefined, socketProvider),
+      postgres: gateOperationGateway(
+        new PostgresNativeAccountGateway(undefined, socketProvider),
+        databaseOperationGate,
+      ),
+      mysql: gateOperationGateway(
+        new MysqlNativeAccountGateway(undefined, socketProvider),
+        databaseOperationGate,
+      ),
     }
     const nativeAccountService = new NativeAccountService(
       connectionService,
@@ -481,8 +532,14 @@ export async function buildRuntime(
       connectionService,
       nativeAccountGateways,
       {
-        postgres: new PostgresNativeGrantGateway(undefined, socketProvider),
-        mysql: new MysqlNativeGrantGateway(undefined, socketProvider),
+        postgres: gateOperationGateway(
+          new PostgresNativeGrantGateway(undefined, socketProvider),
+          databaseOperationGate,
+        ),
+        mysql: gateOperationGateway(
+          new MysqlNativeGrantGateway(undefined, socketProvider),
+          databaseOperationGate,
+        ),
       },
       (actor, connectionId) => webAccessService.can(actor, connectionId, 'account-manage'),
       securityAudit,
@@ -584,8 +641,24 @@ export async function buildRuntime(
       },
     )
     const transferDataGateways = {
-      postgres: new PostgresTransferDataGateway(undefined, undefined, socketProvider),
-      mysql: new MysqlTransferDataGateway(undefined, undefined, socketProvider),
+      postgres: gateAsyncIterableGateway(
+        new PostgresTransferDataGateway(undefined, undefined, socketProvider),
+        databaseOperationGate,
+      ),
+      mysql: gateAsyncIterableGateway(
+        new MysqlTransferDataGateway(undefined, undefined, socketProvider),
+        databaseOperationGate,
+      ),
+    }
+    const exactImportGateways = {
+      postgres: gateOperationGateway(
+        new PostgresExactJsonImportGateway(undefined, socketProvider),
+        databaseOperationGate,
+      ),
+      mysql: gateOperationGateway(
+        new MysqlExactJsonImportGateway(undefined, socketProvider),
+        databaseOperationGate,
+      ),
     }
     const friendlyCsvExportService = new FriendlyCsvExportService(
       transferJobService,
@@ -643,10 +716,7 @@ export async function buildRuntime(
     const exactJsonImportService = new ExactJsonImportService(
       transferJobService,
       connectionService,
-      {
-        postgres: new PostgresExactJsonImportGateway(undefined, socketProvider),
-        mysql: new MysqlExactJsonImportGateway(undefined, socketProvider),
-      },
+      exactImportGateways,
       sourcePackages,
       exactJsonImportPreview,
       (actor, job) => authorizeTransfer(webAccessService, actor, job),
@@ -687,10 +757,7 @@ export async function buildRuntime(
     const exactCsvImportService = new ExactCsvImportService(
       transferJobService,
       connectionService,
-      {
-        postgres: new PostgresExactJsonImportGateway(undefined, socketProvider),
-        mysql: new MysqlExactJsonImportGateway(undefined, socketProvider),
-      },
+      exactImportGateways,
       sourcePackages,
       { read: readExactCsvPackage },
       exactCsvImportPreview,
@@ -719,10 +786,16 @@ export async function buildRuntime(
     )
     const sqlSnapshotCatalogs = {
       postgres: new SqlDumpSnapshotCatalog(
-        new PostgresSqlDumpSnapshotSessionFactory(undefined, undefined, socketProvider),
+        gateSessionFactory(
+          new PostgresSqlDumpSnapshotSessionFactory(undefined, undefined, socketProvider),
+          databaseOperationGate,
+        ),
       ),
       mysql: new SqlDumpSnapshotCatalog(
-        new MysqlSqlDumpSnapshotSessionFactory(undefined, undefined, socketProvider),
+        gateSessionFactory(
+          new MysqlSqlDumpSnapshotSessionFactory(undefined, undefined, socketProvider),
+          databaseOperationGate,
+        ),
       ),
     }
     const sqlTransferAuthorizer = async (
@@ -775,8 +848,14 @@ export async function buildRuntime(
       connectionService,
       sqlSourcePackages,
       {
-        postgres: new PostgresSqlRestoreCatalogGateway(undefined, socketProvider),
-        mysql: new MysqlSqlRestoreCatalogGateway(undefined, socketProvider),
+        postgres: gateOperationGateway(
+          new PostgresSqlRestoreCatalogGateway(undefined, socketProvider),
+          databaseOperationGate,
+        ),
+        mysql: gateOperationGateway(
+          new MysqlSqlRestoreCatalogGateway(undefined, socketProvider),
+          databaseOperationGate,
+        ),
       },
       transferPreviewPlans,
       sqlTransferAuthorizer,
@@ -787,8 +866,14 @@ export async function buildRuntime(
       sqlRestorePreview,
       sqlSourcePackages,
       {
-        postgres: new PostgresSqlRestoreGateway(undefined, socketProvider, loadPostgresSqlDumpData),
-        mysql: new MysqlSqlRestoreGateway(undefined, socketProvider, loadMysqlSqlDumpData),
+        postgres: gateSessionFactory(
+          new PostgresSqlRestoreGateway(undefined, socketProvider, loadPostgresSqlDumpData),
+          databaseOperationGate,
+        ),
+        mysql: gateSessionFactory(
+          new MysqlSqlRestoreGateway(undefined, socketProvider, loadMysqlSqlDumpData),
+          databaseOperationGate,
+        ),
       },
       (actor, job) => authorizeTransfer(webAccessService, actor, job),
     )
