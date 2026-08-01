@@ -49,6 +49,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --tag dbweb:ci .
+      - run: docker compose --file compose.ha.yaml config
+        env:
+          DBWEB_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          DBWEB_ADMIN_PASSWORD: ci-bootstrap-password
 
   ha-integration:
     runs-on: ubuntu-latest
