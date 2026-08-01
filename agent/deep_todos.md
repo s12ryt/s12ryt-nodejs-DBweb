@@ -16,7 +16,7 @@
 - [x] 完成里程碑五 A：持久化 job、分段加密暫存、preview 與安全下載基礎。
 - [x] 完成里程碑五 B：CSV/JSON 串流匯入匯出、映射、衝突與續傳。
 - [x] 完成里程碑五 C：純 Node SQL dump/restore、進階物件、UI與完整驗收。
-- [ ] 完成里程碑六：多實例、效能、安全與完整回歸。
+- [x] 完成里程碑六：多實例、效能、安全與完整回歸。
 
 ## 歷史決策
 
@@ -112,3 +112,7 @@
 - 2026-08-01：自動化功能負載已逐列消費 1,000,000 筆 SQL NDJSON 與 1,000,000 筆 exact JSON transfer records，未在測試中收集完整結果；完整單元候選目前為 136 個測試檔、530 tests 通過。此證據只證明惰性串流與上限，不取代後續同 runner baseline/candidate 相對效能門檻。
 - 2026-08-01：GitHub Actions run `30680694803` 完整全綠；quality、Docker/HA Compose、browser、PostgreSQL 9.6/17、MySQL 5.6/8.4 與 ha-integration 均通過，確認 keyset、受限 offset、SQL NDJSON 與百萬列惰性串流未破壞既有功能。
 - 2026-08-01：新增同 runner baseline/candidate 效能驗收。main profile固定建立100個connection profiles、10個並行操作者、120秒warmup與600秒steady；量測keyset rows、NDJSON TTFB/p95/throughput/error及三API容器RSS。門檻為相對退化15%、錯誤率低於1%、RSS低於1.5GiB且steady成長不超過10%；手動smoke不能取代正式證據。此workflow待首次GitHub實跑。
+- 2026-08-01：首次 Performance run `30681680040` 在正式負載前精準抓到 runner 把 `baseUrl` 誤當數值profile欄位，以及 unconditional cleanup 缺少Compose必要環境；先以runner與workflow契約測試建立RED，再只驗五個profile欄位並將必要環境提升到job scope。
+- 2026-08-01：Performance run `30683306738` 完整跑完同一 AMD EPYC 7763、4 logical CPUs、15.61GiB runner上的baseline與candidate。candidate在100 connection profiles、10 operators、120秒warmup與600秒steady下為92.17 req/s、p95 182.37ms、TTFB p95 181.07ms、錯誤率0、三API peak RSS 783,191,900 bytes、steady RSS成長4.87%；相較baseline吞吐略升、p95與TTFB略降，全部門檻通過。
+- 2026-08-01：供應鏈安全閘門新增固定版本Gitleaks tracked-history scan、`pnpm audit --audit-level high`、CycloneDX 1.7 SBOM與nonroot/read-only/cap-drop container驗證；修補`@fastify/static` path traversal high advisory至10.1.1。Security run `30683306732`全綠，SBOM含417個components，audit high/critical為0。
+- 2026-08-01：新增deterministic hostile-input corpus，涵蓋tar traversal/header mutations、非canonical keyset cursor、DDL fragment breakout與native grant控制字元；fuzz RED另發現帶空白JSON游標未驗canonical encoding，修正decoder後全部通過。完整CI run `30683306761`的quality、Docker/HA Compose、browser、四版本資料庫與ha-integration全綠。里程碑六與完整首版完成。
