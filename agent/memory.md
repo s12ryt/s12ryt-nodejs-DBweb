@@ -108,3 +108,6 @@
 - runtime已將連線測試、瀏覽、SQL/keepalive、mutation、DDL、原生帳號/grants、transfer data/import、SQL dump snapshot/restore全部接入共同gate；容量耗盡回固定503與Retry-After，SQL/DDL/mutation/grant service保留可重試錯誤，原生帳號手動與背景驗證不污染credential狀態或audit。
 - HA integration新增兩個獨立PostgreSQL handles並行驗證全域/connection配額、release讓位與expired lease回收；本機無外部服務時明確略過，待GitHub Actions執行真實證據。
 - M6 operation gate以13筆English plain原子提交推送；GitHub Actions run `30678948821` 的quality、Docker/HA Compose、browser、PostgreSQL9.6/17、MySQL5.6/8.4及ha-integration全部通過。HA job已真實證明跨兩個PostgreSQL handles的全域/connection配額、release讓位與expired lease回收。
+- 完成百萬列瀏覽路徑RED→GREEN：PG/MySQL會從catalog選PK或全欄非空unique key，以opaque canonical cursor與全參數化lexicographic predicate做正反向keyset分頁；無穩定鍵才使用offset，硬上限100,000並在Web顯示慢頁警告。
+- 完成SQL NDJSON串流RED→GREEN：SqlQueryService共用原active query map、cancel及audit；PG pg-cursor與MySQL callback query stream在唯讀交易內逐批輸出，runtime以AsyncIterable operation gate包住完整生命週期。一般user限制100k列/256MiB，admin限制1m列/2GiB，timeout最多5分鐘。
+- 新增百萬列自動化功能負載，實際逐列消費1,000,000筆SQL NDJSON與1,000,000筆exact JSON transfer records且不收集整份輸出；完整候選單元回歸為136個測試檔、530 tests通過。相對效能與RSS門檻仍須由後續同runner baseline/candidate harness證明。

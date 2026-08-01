@@ -107,3 +107,6 @@
 - 2026-08-01：完成 PostgreSQL 權威 database operation gate；所有實例合計預設 100、每 connection 預設 10、60 秒租約與 20 秒 heartbeat，等待 30 秒後回安全可重試 503。Promise、AsyncIterable 及長生命週期 session adapters 會持有租約到操作完成、iterator 關閉或 session close，避免只限制連線解析階段。
 - 2026-08-01：互動式瀏覽、SQL、資料異動、DDL、原生帳號與 grants，以及 transfer snapshot/import/restore 均已接入共同 operation gate；容量忙碌不會被包成 driver failure，也不會將原生帳號誤標 credential-stale。跨兩個 PostgreSQL handles 的全域/connection 配額、釋放與逾時回收案例已加入 HA integration，待 GitHub Actions 真實執行。
 - 2026-08-01：GitHub Actions run `30678948821` 完整全綠；quality、Docker/HA Compose、browser、四版本資料庫與 ha-integration 均通過。HA job 真實使用兩個 PostgreSQL metadata handles 驗證全域與每 connection 配額、release 立即讓位及 expired lease 回收，database operation gate 完成並進入百萬列路徑驗收。
+- 2026-08-01：完成百萬列互動路徑第一階段。資料瀏覽會優先選 primary key 或所有欄位皆非空的 unique key，以 opaque keyset cursor、參數化 lexicographic predicate及正反向排序分頁；無穩定鍵才降級 offset，最大 100,000 並回傳 UI 警告。PostgreSQL/MySQL catalog、API與雙語工作台均已有回歸測試。
+- 2026-08-01：SQL 新增唯讀 NDJSON 背壓串流，共用既有 query ID/cancel/audit；PostgreSQL 使用 cursor、MySQL 使用 callback query stream，皆在唯讀一致性交易內且支援 abort、timeout、consumer early close與 operation gate。一般使用者上限 100,000 列/256MiB，管理員上限 1,000,000 列/2GiB，timeout 最大五分鐘。
+- 2026-08-01：自動化功能負載已逐列消費 1,000,000 筆 SQL NDJSON 與 1,000,000 筆 exact JSON transfer records，未在測試中收集完整結果；完整單元候選目前為 136 個測試檔、530 tests 通過。此證據只證明惰性串流與上限，不取代後續同 runner baseline/candidate 相對效能門檻。
