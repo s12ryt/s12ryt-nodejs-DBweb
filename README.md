@@ -45,3 +45,9 @@ pnpm build
 pnpm exec playwright install
 pnpm test:e2e
 ```
+
+## 相對效能驗收
+
+`.github/workflows/performance.yml` 會在 `main` 上於同一個 GitHub runner 依序建立前一個已部署 revision 與目前 revision 的三實例 HA image。每輪建立 100 個 PostgreSQL connection profiles，以 10 個並行操作者先 warmup 2 分鐘，再量測 10 分鐘的 keyset rows 與 NDJSON SQL stream。
+
+驗收會記錄 runner CPU、記憶體與 Node.js 版本，並阻擋下列退化：p95 latency 或 TTFB 超過 baseline 15%、throughput 下降超過 15%、錯誤率達 1%、三個 API containers RSS 超過 1.5 GiB，或 steady RSS 成長超過 10%。手動執行 workflow 時可選 smoke profile；smoke 結果不取代正式門檻。
