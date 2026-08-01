@@ -47,6 +47,12 @@ export interface PerformanceProfileOptions {
   smoke: boolean
 }
 
+interface PerformanceSetupFetchOptions {
+  attempts?: number
+  retryDelayMs?: number
+  fetcher?: typeof fetch
+}
+
 export function validatePerformanceRunnerOptions(
   input: PerformanceProfileOptions,
 ): PerformanceProfileOptions {
@@ -92,6 +98,27 @@ export function parseContainerMemoryUsage(value: string): number {
     GiB: 1024 ** 3,
   }
   return amount * (multipliers[unit] as number)
+}
+
+export async function fetchPerformanceSetup(
+  input: string | URL | Request,
+  init?: RequestInit,
+  options: PerformanceSetupFetchOptions = {},
+): Promise<Response> {
+  const attempts = options.attempts ?? 30
+  const retryDelayMs = options.retryDelayMs ?? 1_000
+  const fetcher = options.fetcher ?? fetch
+  if (!Number.isSafeInteger(attempts) || attempts < 1 || retryDelayMs < 0) {
+    throw new TypeError('invalid performance setup retry options')
+  }
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const response = await fetcher(input, init)
+    if (![502, 503, 504].includes(response.status) || attempt === attempts) {
+      return response
+    }
+    await delay(retryDelayMs)
+  }
+  throw new Error('performance setup retry loop exhausted')
 }
 
 async function main(): Promise<void> {
@@ -180,7 +207,7 @@ function parseOptions(): PerformanceRunnerOptions {
 }
 
 async function login(options: PerformanceRunnerOptions): Promise<AuthSession> {
-  const response = await fetch(`${options.baseUrl}/api/auth/login`, {
+  const response = await fetchPerformanceSetup(`${options.baseUrl}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ username: options.adminUsername, password: options.adminPassword }),
@@ -315,7 +342,7 @@ async function apiRequest<T = unknown>(
   path: string,
   input: { method: string; body?: unknown },
 ): Promise<T> {
-  const response = await fetch(`${options.baseUrl}${path}`, {
+  const response = await fetchPerformanceSetup(`${options.baseUrl}${path}`, {
     method: input.method,
     headers: {
       cookie: session.cookie,
@@ -385,6 +412,11 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name]
   if (!value) throw new TypeError(`${name} is required`)
   return value
+}
+
+async function delay(durationMs: number): Promise<void> {
+  if (durationMs === 0) return
+  await new Promise<void>((resolve) => setTimeout(resolve, durationMs))
 }
 
 const entryPoint = process.argv[1]

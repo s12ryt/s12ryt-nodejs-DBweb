@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  fetchPerformanceSetup,
   parseContainerMemoryUsage,
   validatePerformanceRunnerOptions,
 } from './performance-runner.js';
@@ -64,5 +65,39 @@ describe('performance runner', () => {
       steadySeconds: 600,
       smoke: false,
     });
+  });
+
+  it('retries only transient gateway failures during setup', async () => {
+    const statuses = [503, 502, 200];
+    const fetcher = async (): Promise<Response> => new Response('{}', {
+      status: statuses.shift() ?? 500,
+      headers: { 'content-type': 'application/json' },
+    });
+
+    const response = await fetchPerformanceSetup('http://dbweb.test/api/auth/login', {}, {
+      attempts: 3,
+      retryDelayMs: 0,
+      fetcher,
+    });
+
+    expect(response.status).toBe(200);
+    expect(statuses).toEqual([]);
+  });
+
+  it('does not retry non-transient setup responses', async () => {
+    let calls = 0;
+    const fetcher = async (): Promise<Response> => {
+      calls += 1;
+      return new Response('{}', { status: 401 });
+    };
+
+    const response = await fetchPerformanceSetup('http://dbweb.test/api/auth/login', {}, {
+      attempts: 3,
+      retryDelayMs: 0,
+      fetcher,
+    });
+
+    expect(response.status).toBe(401);
+    expect(calls).toBe(1);
   });
 });
