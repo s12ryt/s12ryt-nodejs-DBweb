@@ -1,5 +1,6 @@
 import type { ConnectionService } from '../connections/connection-service.js'
 import type { DatabaseEngine, ResolvedConnection } from '../connections/connection-types.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import { detectDdlCapabilities, type DdlCapabilities } from './ddl-capabilities.js'
 import type { DdlCommand } from './ddl-command.js'
 import { buildDdlStatements } from './ddl-sql-builder.js'
@@ -66,7 +67,8 @@ export class DdlService {
     try {
       const version = await this.gateways[connection.engine].serverVersion(connection)
       return detectDdlCapabilities(connection.engine, version)
-    } catch {
+    } catch (error) {
+      if (error instanceof DatabaseOperationGateError) throw error
       throw new DdlServiceError('DDL_FAILED')
     }
   }
@@ -81,7 +83,8 @@ export class DdlService {
     try {
       const version = await this.gateways[connection.engine].serverVersion(connection)
       capabilities = detectDdlCapabilities(connection.engine, version)
-    } catch {
+    } catch (error) {
+      if (error instanceof DatabaseOperationGateError) throw error
       throw new DdlServiceError('DDL_FAILED')
     }
     const statements = buildDdlStatements(capabilities, input.command)
@@ -92,7 +95,8 @@ export class DdlService {
       await this.gateways[connection.engine].execute(connection, statements, { transactional })
       await this.record(actor.id, input, descriptor, statements, transactional, 'success')
       return { statementsExecuted: statements.length, transactional }
-    } catch {
+    } catch (error) {
+      if (error instanceof DatabaseOperationGateError) throw error
       await this.record(actor.id, input, descriptor, statements, transactional, 'failed', 'DDL_FAILED')
       throw new DdlServiceError('DDL_FAILED')
     }

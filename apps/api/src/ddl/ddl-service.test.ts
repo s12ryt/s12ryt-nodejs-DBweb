@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ConnectionService } from '../connections/connection-service.js'
 import { MemoryConnectionRepository } from '../connections/memory-connection-repository.js'
 import { EnvelopeEncryption } from '../security/envelope-encryption.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import {
   DdlService,
   DdlServiceError,
@@ -137,5 +138,16 @@ describe('DdlService', () => {
       status: 'failed', errorCode: 'DDL_FAILED', action: 'rename-table',
     }))
     expect(JSON.stringify(vi.mocked(audit.record).mock.calls)).not.toContain('database-secret at')
+  })
+
+  it('保留可重試的資料庫操作忙碌錯誤', async () => {
+    const { service, profile, gateway } = await setup()
+    const busy = new DatabaseOperationGateError('DATABASE_OPERATION_BUSY', true)
+    vi.mocked(gateway.execute).mockRejectedValueOnce(busy)
+
+    await expect(service.execute({ id: 'admin-1', role: 'admin' }, {
+      connectionId: profile.id,
+      command: { kind: 'create-schema', name: 'reporting' },
+    })).rejects.toBe(busy)
   })
 })
