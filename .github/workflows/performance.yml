@@ -78,11 +78,17 @@ jobs:
         shell: bash
         run: |
           docker compose --project-name dbweb-perf --file compose.ha.yaml up --detach --no-build
+          ready_streak=0
           for attempt in {1..60}; do
-            if curl --fail --silent http://127.0.0.1:3000/api/health/ready >/dev/null; then break; fi
-            if [[ "$attempt" == "60" ]]; then docker compose --project-name dbweb-perf --file compose.ha.yaml logs; exit 1; fi
+            if curl --fail --silent http://127.0.0.1:3000/api/health/ready >/dev/null; then
+              ready_streak=$((ready_streak + 1))
+            else
+              ready_streak=0
+            fi
+            if [[ "$ready_streak" -ge 3 ]]; then break; fi
             sleep 2
           done
+          if [[ "$ready_streak" -lt 3 ]]; then docker compose --project-name dbweb-perf --file compose.ha.yaml logs; exit 1; fi
           pnpm --filter @dbweb/api exec tsx src/performance/performance-runner.ts \
             --base-url http://127.0.0.1:3000 --revision "$BASELINE_SHA" \
             --output "$RUNNER_TEMP/baseline.json" --compose-project dbweb-perf \
@@ -97,11 +103,17 @@ jobs:
         shell: bash
         run: |
           docker compose --project-name dbweb-perf --file compose.ha.yaml up --detach --no-build
+          ready_streak=0
           for attempt in {1..60}; do
-            if curl --fail --silent http://127.0.0.1:3000/api/health/ready >/dev/null; then break; fi
-            if [[ "$attempt" == "60" ]]; then docker compose --project-name dbweb-perf --file compose.ha.yaml logs; exit 1; fi
+            if curl --fail --silent http://127.0.0.1:3000/api/health/ready >/dev/null; then
+              ready_streak=$((ready_streak + 1))
+            else
+              ready_streak=0
+            fi
+            if [[ "$ready_streak" -ge 3 ]]; then break; fi
             sleep 2
           done
+          if [[ "$ready_streak" -lt 3 ]]; then docker compose --project-name dbweb-perf --file compose.ha.yaml logs; exit 1; fi
           pnpm --filter @dbweb/api exec tsx src/performance/performance-runner.ts \
             --base-url http://127.0.0.1:3000 --revision "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/candidate.json" --compose-project dbweb-perf \

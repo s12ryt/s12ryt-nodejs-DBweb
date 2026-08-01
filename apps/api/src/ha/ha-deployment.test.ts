@@ -52,4 +52,11 @@ describe('HA deployment configuration', () => {
     expect(workflow).toContain('DBWEB_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=')
     expect(workflow).toContain('DBWEB_ADMIN_PASSWORD: performance-admin-password')
   })
+
+  it('requires stable HA readiness before both performance phases', async () => {
+    const workflow = await readFile('.github/workflows/performance.yml', 'utf8')
+
+    expect(workflow.match(/^\s{10}ready_streak=0$/gmu)).toHaveLength(2)
+    expect(workflow.match(/-ge 3/gu)).toHaveLength(2)
+  })
 })
