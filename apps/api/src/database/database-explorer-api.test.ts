@@ -5,6 +5,7 @@ import { buildApp } from '../app.js'
 import { AuthService } from '../auth/auth-service.js'
 import { MemoryAuthRepository } from '../auth/memory-auth-repository.js'
 import { DatabaseConnectionError } from '../connections/connector-error.js'
+import { DatabaseOperationGateError } from '../ha/database-operation-gate.js'
 import type { DatabaseExplorer } from './database-explorer.js'
 
 describe('database explorer HTTP API', () => {
@@ -97,5 +98,26 @@ describe('database explorer HTTP API', () => {
     expect(response.json()).toEqual({
       error: { code: 'DATABASE_CONNECTION_FAILED', message: 'Database connection failed' },
     })
+  })
+
+  it('資料庫操作配額忙碌時回可重試503且不洩漏租約資訊', async () => {
+    const { app, cookie } = await setup({
+      listSchemas: vi.fn(async () => {
+        throw new DatabaseOperationGateError('DATABASE_OPERATION_BUSY', true)
+      }),
+    })
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/connections/c1/schemas',
+      headers: { cookie, 'accept-language': 'en' },
+    })
+
+    expect(response.statusCode).toBe(503)
+    expect(response.headers['retry-after']).toBe('1')
+    expect(response.json()).toEqual({
+      error: { code: 'DATABASE_OPERATION_BUSY', message: 'Database operation capacity is busy' },
+    })
+    expect(response.body).not.toContain('lease')
+    expect(response.body).not.toContain('owner')
   })
 })

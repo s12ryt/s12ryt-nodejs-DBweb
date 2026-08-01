@@ -36,6 +36,7 @@ import {
 } from './data/data-mutation-service.js'
 import { DdlValidationError, type DdlCommand } from './ddl/ddl-command.js'
 import { DdlServiceError, type DdlService } from './ddl/ddl-service.js'
+import { DatabaseOperationGateError } from './ha/database-operation-gate.js'
 import {
   QueryError,
   type ExecuteQueryInput,
@@ -130,6 +131,7 @@ const messages = {
     CONNECTION_NOT_FOUND: 'Connection not found',
     CONFIRMATION_REQUIRED: 'Confirmation required for high-risk SQL',
     DATABASE_CONNECTION_FAILED: 'Database connection failed',
+    DATABASE_OPERATION_BUSY: 'Database operation capacity is busy',
     DDL_CAPABILITY_UNSUPPORTED: 'DDL capability is not supported by this database version',
     DDL_COLUMN_DEFINITION_REQUIRED: 'A complete column definition is required',
     DDL_CONFIRMATION_REQUIRED: 'DDL confirmation required',
@@ -224,6 +226,7 @@ const messages = {
     CONNECTION_NOT_FOUND: '找不到連線設定',
     CONFIRMATION_REQUIRED: '高風險 SQL 需要二次確認',
     DATABASE_CONNECTION_FAILED: '資料庫連線失敗',
+    DATABASE_OPERATION_BUSY: '資料庫操作容量忙碌中',
     DDL_CAPABILITY_UNSUPPORTED: '此資料庫版本不支援該 DDL 能力',
     DDL_COLUMN_DEFINITION_REQUIRED: '需要完整的欄位定義',
     DDL_CONFIRMATION_REQUIRED: 'DDL 操作需要二次確認',
@@ -562,6 +565,13 @@ function csrfMatches(expected: string, received: string | undefined): boolean {
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 1_048_576 })
+  app.setErrorHandler((error, request, reply) => {
+    if (error instanceof DatabaseOperationGateError && error.code === 'DATABASE_OPERATION_BUSY') {
+      reply.header('retry-after', '1')
+      return sendError(request, reply, 503, 'DATABASE_OPERATION_BUSY')
+    }
+    return reply.send(error)
+  })
 
   await app.register(cookie)
   await app.register(helmet, {
